@@ -1,9 +1,9 @@
 {
     "types" : "infernal",
-    "genomes_dir": "/home/we93kif/maria_projects/SweetSynteny/genome",
-    "query": "/home/we93kif/maria_projects/7_kathi/data/cm/RF01527.cm",
-    "output_dir" : "/home/we93kif/maria_projects/7_kathi/nf_result/",
-    "gene_of_interest": "crfA",
+    "genomes_dir": "/path/to/genome/folders/",
+    "query": "/path/to/file.cm",
+    "output_dir" : "/path/to/result/folder/",
+    "gene_of_interest": "name_of_gene_of_interest",
     "cluster_level" : "sequence_level",
     "neighbours" : "2,2",
     "scale" : "no",
