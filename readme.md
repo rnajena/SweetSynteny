@@ -1,25 +1,20 @@
 # WORK IN PROGRESS - DISCLAIMER
 This pipeline is work-in-progress, you might fing bugs, some are known, while others remain undiscovered. Before getting desperate, please check out the Issues that are already opened and discussed. We encourage the community to contribute by reporting any issues they encounter on GitHub. Feel free to reach out to me via email or open an issue directly. It's important to note that I cannot be held responsible for any results obtained using SweetSynteny or any conclusions drawn from them.
 
-# TODO
-- bin folder for python scripts
-- modules folder for nf
-
 ***
 # SweetSynteny - Overview
 - Searching with `blastn` or `tblastn` or `cmsearch`
 - Gets neighours of you hit and saves them in a tsv file
 - Clustering with 
-    - on sequence / structur level: `mmseq easy lineclust` or `cmscan` [TODO] -> see Table
-    - on microsynteny level: `DBscan` or `h`
+    - on sequence / structur level (-> see Table): `mmseq easy lineclust` or `cmscan` [TODO] 
+    - on microsynteny level: `DBscan` or `Hierarchical clustering` [TODO]
 
 | Conitig:Counter | Gene Name          | Start  | Stop   | Ori   | Bio_type       | Color   |
 |-----------------|--------------------|--------|--------|-------|----------------|---------|
 | NZ_CP013002.1:0 | gene-AQ619_RS00960 | 215167 | 216307 | sense | protein_coding | #FFFFFF |
 
-- Generates micorsynteny plots
-- Compares ...
-- Generates trees using `ete3`
+- Generates micorsynteny plots and gives you statistics on the similarity of the microsynteny locations
+- Generates trees using `ete3` [TODO]
 ***
 
 ## Graphical Workflow
@@ -48,28 +43,33 @@ The pipeline is written in Nextflow. In order to run `SweetSynteny`, I recommend
 
 ## Usage
 Let us briefly go over the most important parameters and options. 
---hit_file
---input_type
---gff_file
---fna_file
---gene_of_interest
---neighbours
---output_path
+<samp>types infernal|blastn|blastp|tblastn </samp>
+<samp>genomes_dir FOLDER </samp>                
+<samp>query .cm | .fna </samp>
+<samp>output_dir FOLDER </samp>
+<samp>gene_of_interest string </samp>
+<samp>cluster_level sequence_level | sequence_level </samp>
+<samp>neighbours x:y | x-y </samp>
+<samp>scale yes | no </samp> 
+<samp>plotting png | svg </samp>
+<samp>cluster >2 </samp>
+<samp>threshold 0-1 </samp>
 
 ### Use a config file.
 
 ### Running the pipeline
-`nextflow run SweetSynteny.nf -params-file /home/we93kif/maria_projects/SweetSynteny/para.json`
-
+`nextflow run SweetSynteny.nf -params-file /SweetSynteny/para.json`
 
 ### Other tools
 <details><summary>Click here for all citations</summary>
   * BLAST
+    * `Korf, Ian, Mark Yandell, and Joseph Bedell. Blast. " O'Reilly Media, Inc.", 2003.`
   * INFERNAL
+     * `Nawrocki, Eric P., Diana L. Kolbe, and Sean R. Eddy. "Infernal 1.0: inference of RNA alignments." Bioinformatics 25.10 (2009): 1335-1337.`
   * MMSeqs2:
     * `Steinegger, M., Söding, J. "MMseqs2 enables sensitive protein sequence searching for the analysis of massive data sets". Nat Biotechnol 35, 1026–1028 (2017)`
-  * DBscan
   * ETE3
+    * `Huerta-Cepas, Jaime, François Serra, and Peer Bork. "ETE 3: reconstruction, analysis, and visualization of phylogenomic data." Molecular biology and evolution 33.6 (2016): 1635-1638.`
 </details>
 
 ## Cite us
@@ -83,14 +83,3 @@ title = {{SweetSynteny}},
 url = {https://github.com/rnajena/SweetSynteny}
 }
 ```
-
-
-
-
-"""
-python /home/we93kif/maria_projects/SweetSynteny/bin/plot_context_script.py \
---scale no \
---input_file /data/fass5/projects/ProjectFroehlich/data/result/merged_and_clustered_results_crfa5_proteinVSsrna/merged_with_color.tsv \
---output_path /home/we93kif/maria_projects/SweetSynteny/test \
---output_ending png
-"""
