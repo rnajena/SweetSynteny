@@ -1,20 +1,27 @@
 # WORK IN PROGRESS
-This pipeline is work-in-progress, you might fing bugs, some are known, while others remain undiscovered. Before getting desperate, please check out the Issues that are already opened and discussed. We encourage the community to contribute by reporting any issues they encounter on GitHub. Feel free to reach out to me via email or open an issue directly. It's important to note that I cannot be held responsible for any results obtained using SweetSynteny or any conclusions drawn from them.
+This pipeline is work-in-progress, you might fing bugs, some are known, while others remain undiscovered. Before getting desperate, please check out the Issues that are already opened and discussed. We encourage the community to contribute by reporting any issues they encounter on GitHub. Feel free to reach out to me via email (maria.schreiber@uni-jena.de) or open an issue directly. It's important to note that I cannot be held responsible for any results obtained using SweetSynteny or any conclusions drawn from them.
 
 ***
-# SweetSynteny - Overview
-- Searching with `blastn` or `tblastn` or `cmsearch`
-- Gets neighours of you hit and saves them in a tsv file
-- Clustering with 
-    - on sequence / structur level (-> see Table): `mmseq easy lineclust` or `cmscan` [TODO] 
-    - on microsynteny level: `DBscan` or `Hierarchical clustering` [TODO]
+# SweetSynteny - Unraveling Microsynteny Patterns
+Microsynteny, the conservation of gene order and orientation within small genomic regions across different species, provides crucial insights into evolutionary relationships and functional conservation. 
+
+Key features of SweetSynteny:
+- Flexible input:
+    1. different number of organisms (from bacteria to eukaryotes)
+    2. different searches (`cmsearch` for sRNA or `blast` for protein)
+- Sequence-driven clustering and color-pattern Microsynteny clustering
+    1. on sequence / structur level (-> see Table): `mmseq easy lineclust` [Done] or `cmscan` ####### TODO for github
+    2. on microsynteny level: `DBscan` [Done] or `Hierarchical clustering` ####### TODO for github
+- Comprehensive results:
+    1. phylogenetic trees using `ete3` ####### TODO for github
+    2. statistical summaries
+    3. microsynteny plots
+    4. statistics on the similarity of the microsynteny locations
 
 | Conitig:Counter | Gene Name          | Start  | Stop   | Strand| Bio_type       | Color   |
 |-----------------|--------------------|--------|--------|-------|----------------|---------|
 | NZ_CP013002.1:0 | gene-AQ619_RS00960 | 215167 | 216307 | sense | protein_coding | #FFFFFF |
 
-- Generates micorsynteny plots and gives you statistics on the similarity of the microsynteny locations
-- Generates trees using `ete3` [TODO]
 ***
 
 ## Graphical Workflow
