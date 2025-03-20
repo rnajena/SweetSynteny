@@ -43,16 +43,27 @@ The pipeline is written in Nextflow. In order to run `SweetSynteny`, I recommend
 
 ## Usage
 Let us briefly go over the most important parameters and options. 
+
 <samp>types infernal|blastn|blastp|tblastn </samp>
-<samp>genomes_dir FOLDER </samp>                
+
+<samp>genomes_dir FOLDER </samp>      
+
 <samp>query .cm | .fna </samp>
+
 <samp>output_dir FOLDER </samp>
+
 <samp>gene_of_interest string </samp>
+
 <samp>cluster_level sequence_level | sequence_level </samp>
+
 <samp>neighbours x:y | x-y </samp>
+
 <samp>scale yes | no </samp> 
+
 <samp>plotting png | svg </samp>
+
 <samp>cluster >2 </samp>
+
 <samp>threshold 0-1 </samp>
 
 ### Use a config file.
