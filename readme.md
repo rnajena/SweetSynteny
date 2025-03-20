@@ -9,7 +9,7 @@ This pipeline is work-in-progress, you might fing bugs, some are known, while ot
     - on sequence / structur level (-> see Table): `mmseq easy lineclust` or `cmscan` [TODO] 
     - on microsynteny level: `DBscan` or `Hierarchical clustering` [TODO]
 
-| Conitig:Counter | Gene Name          | Start  | Stop   | Ori   | Bio_type       | Color   |
+| Conitig:Counter | Gene Name          | Start  | Stop   | Strand| Bio_type       | Color   |
 |-----------------|--------------------|--------|--------|-------|----------------|---------|
 | NZ_CP013002.1:0 | gene-AQ619_RS00960 | 215167 | 216307 | sense | protein_coding | #FFFFFF |
 
