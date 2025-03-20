@@ -24,8 +24,7 @@ This pipeline is work-in-progress, you might fing bugs, some are known, while ot
 ## Dependencies and installation
 The pipeline is written in Nextflow. In order to run `SweetSynteny`, I recommend creating a conda environment dedicated for NextFlow.
 1. Install [miniconda](https://docs.conda.io/projects/miniconda/en/latest/) or [conda]()
-2. Next, make sure that conda is part of your $PATH variable, which is usually the case.
-3. Create a conda environment and install NextFlow within this environment and install everything else.
+2. Create a conda environment and install NextFlow within this environment and install everything else.
     ```bash
     conda create -n nextflow -c bioconda nextflow
     conda activate nextflow
@@ -33,13 +32,16 @@ The pipeline is written in Nextflow. In order to run `SweetSynteny`, I recommend
     conda install bioconda::blast
     conda install bioconda::mmseq
     conda install -c conda-forge matplotlib pandas platformdirs pytest requests seaborn
-    pip install rnajena-sugar
     ```
-4. Clone the github repository for the latest version of `SweetSynteny`
-    ```bash
-    nextflow pull rnajena/SweetSynteny
-    ```
-5.  Done!
+3. sugar
+   ```
+   pip install rnajena-sugar
+   ```
+5. Clone the github repository for the latest version of `SweetSynteny`
+   ```bash
+   nextflow pull rnajena/SweetSynteny
+   ```
+6.  Done!
 
 ## Usage
 Let us briefly go over the most important parameters and options. 
