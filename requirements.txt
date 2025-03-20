@@ -1,0 +1,9 @@
+# Core libraries
+conda install -c conda-forge matplotlib pandas platformdirs pytest requests seaborn
+pip install rnajena-sugar
+
+# Bioinformatics-specific libraries
+conda install bioconda::nextflow
+conda install bioconda::infernal
+conda install bioconda::blast
+conda install bioconda::mmseqs2

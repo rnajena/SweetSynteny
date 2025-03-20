@@ -1,0 +1,13 @@
+{
+    "types" : "infernal",
+    "genomes_dir": "/home/we93kif/maria_projects/SweetSynteny/genome",
+    "query": "/home/we93kif/maria_projects/7_kathi/data/cm/RF01527.cm",
+    "output_dir" : "/home/we93kif/maria_projects/7_kathi/nf_result/",
+    "gene_of_interest": "crfA",
+    "cluster_level" : "sequence_level",
+    "neighbours" : "2,2",
+    "scale" : "no",
+    "plotting" : "png",
+    "cluster" : 2,
+    "threshold" :0.3
+  }
