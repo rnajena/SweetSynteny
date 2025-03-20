@@ -22,6 +22,8 @@ Key features of SweetSynteny:
 |-----------------|--------------------|--------|--------|-------|----------------|---------|
 | NZ_CP013002.1:0 | gene-AQ619_RS00960 | 215167 | 216307 | sense | protein_coding | #FFFFFF |
 
+So, as you can see, with SweetSynteny, your Microsynteny analysis will be, well... sweet!
+
 ***
 
 ## Graphical Workflow
