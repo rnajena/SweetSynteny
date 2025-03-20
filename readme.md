@@ -73,14 +73,19 @@ Let us briefly go over the most important parameters and options.
 
 ### Other tools
 <details><summary>Click here for all citations</summary>
-  * BLAST
+    
+  * BLAST:
     * `Korf, Ian, Mark Yandell, and Joseph Bedell. Blast. " O'Reilly Media, Inc.", 2003.`
-  * INFERNAL
+      
+  * INFERNAL:
      * `Nawrocki, Eric P., Diana L. Kolbe, and Sean R. Eddy. "Infernal 1.0: inference of RNA alignments." Bioinformatics 25.10 (2009): 1335-1337.`
+       
   * MMSeqs2:
     * `Steinegger, M., Söding, J. "MMseqs2 enables sensitive protein sequence searching for the analysis of massive data sets". Nat Biotechnol 35, 1026–1028 (2017)`
-  * ETE3
+      
+  * ETE3:
     * `Huerta-Cepas, Jaime, François Serra, and Peer Bork. "ETE 3: reconstruction, analysis, and visualization of phylogenomic data." Molecular biology and evolution 33.6 (2016): 1635-1638.`
+      
 </details>
 
 ## Cite us
