@@ -10,7 +10,7 @@
 nextflow.enable.dsl=2
 
 // Pipeline version
-version = '1.0'
+version = '0.1.0'
 
 log.info """
     SweetSyntheny - NF Pipeline
