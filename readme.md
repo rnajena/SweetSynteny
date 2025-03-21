@@ -44,6 +44,7 @@ The pipeline is written in Nextflow. In order to run `SweetSynteny`, I recommend
     ```
 3. sugar
    ```
+   pip install dna_features_viewer
    pip install rnajena-sugar
    ```
 5. Clone the github repository for the latest version of `SweetSynteny`
@@ -96,7 +97,9 @@ Let us briefly go over the most important parameters and options.
       
   * ETE3:
     * `Huerta-Cepas, Jaime, François Serra, and Peer Bork. "ETE 3: reconstruction, analysis, and visualization of phylogenomic data." Molecular biology and evolution 33.6 (2016): 1635-1638.`
-      
+
+  * DNA Features Viewer
+    * `Edinburgh Genome Foundry by Zulko. https://github.com/Edinburgh-Genome-Foundry/DnaFeaturesViewer`      
 </details>
 
 ## Cite us
