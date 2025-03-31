@@ -66,12 +66,19 @@ Let us briefly go over the most important parameters and options.
 
 - Please choose 2 or more genomes you want to search and save them here.
 - And use following structure:
+  
     └── genomes_dir
+  
         ├── genome1_dir
-        │    ├── db.gff  
+  
+        │    ├── db.gff
+  
         │    └── db.fna
+  
         ├── genome2_dir
-        .    ├── db.gff  
+  
+        .    ├── db.gff
+  
         .    └── db.fna
     ...
 
