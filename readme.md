@@ -62,27 +62,59 @@ Let us briefly go over the most important parameters and options.
 - For sRNA(s) we recommend a corresponding CM from RFAM or self-built\
 - You have the choice
 
-<samp>genomes_dir FOLDER </samp>      
+<samp>genomes_dir FOLDER </samp> 
+
+- Please choose 2 or more genomes you want to search and save them here.
+- And use following structure:
+    └── genomes_dir
+        ├── genome1_dir
+        │    ├── db.gff  
+        │    └── db.fna
+        ├── genome2_dir
+        .    ├── db.gff  
+        .    └── db.fna
+    ...
 
 <samp>query .cm | .fna </samp>
 
+- Path to CM or FASTA of the gen of interest
+
 <samp>output_dir FOLDER </samp>
+
+- Path to output folder
 
 <samp>gene_of_interest string </samp>
 
-<samp>cluster_level sequence_level | sequence_level </samp>
+- Name of the gene of interest
+
+<samp>cluster_level sequence_level | structur_level </samp>
+
+- Chose clustering for sRNAs
 
 <samp>neighbours x:y | x-y </samp>
 
+- Set numbers of neighbours (:) or number of nucleotides (-)
+- x and y should be Integer numbers
+
 <samp>scale yes | no </samp> 
+
+- Chose if you want to scale the microsynteny plots
 
 <samp>plotting png | svg </samp>
 
+- Select which output format you prefer for the microsynteny plots
+
 <samp>cluster >2 </samp>
+
+- Chose minimal cluster size for `DBscan` clustering
 
 <samp>threshold 0-1 </samp>
 
+- Select a similarity threshold for clustering
+
 ### Use a config file.
+
+See example `para.json`
 
 ### Running the pipeline
 `nextflow run SweetSynteny.nf -params-file /SweetSynteny/para.json`
