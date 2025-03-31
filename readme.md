@@ -58,6 +58,10 @@ Let us briefly go over the most important parameters and options.
 
 <samp>types infernal|blastn|blastp|tblastn </samp>
 
+- For protein(s) we recommended a (m)fasta of amino acid sequences and tblastn
+- For sRNA(s) we recommend a corresponding CM from RFAM or self-built\
+- You have the choice
+
 <samp>genomes_dir FOLDER </samp>      
 
 <samp>query .cm | .fna </samp>
