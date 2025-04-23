@@ -10,7 +10,7 @@
 nextflow.enable.dsl=2
 
 // Pipeline version
-version = '0.1.0'
+version = '1.0'
 
 log.info """
     SweetSyntheny - NF Pipeline
@@ -46,33 +46,36 @@ process runSearch {
     script:
     if (params.types == 'blastn')
         """
+        makeblastdb -in $genome -dbtype nucl
         blastn \\
             -num_threads $task.cpus \\
             -query ${params.query} \\
             -subject $genome \\
             -out ${id}_search_result.tsv \\
             -outfmt "6 qseqid sseqid bitscore evalue pident length mismatch gapopen qstart qend qlen sstart send sstrand slen qseq sseq" \\
-            -evalue 0.1
+            -evalue 0.01
         """
     else if (params.types == 'blastp')
         """
+        makeblastdb -in $genome -dbtype nucl
         blastp \\
             -num_threads $task.cpus \\
             -query ${params.query} \\
             -db $genome \\
             -out ${id}_search_result.tsv \\
             -outfmt "6 qseqid sseqid bitscore evalue pident length mismatch gapopen qstart qend qlen sstart send sstrand slen qseq sseq" \\
-            -evalue 0.1
+            -evalue 0.01
         """
     else if (params.types == 'tblastn')
         """
+        makeblastdb -in $genome -dbtype nucl
         tblastn \\
             -num_threads $task.cpus \\
             -query ${params.query} \\
             -db $genome \\
             -out ${id}_search_result.tsv \\
             -outfmt "6 qseqid sseqid bitscore evalue pident length mismatch gapopen qstart qend qlen sstart send sstrand slen qseq sseq" \\
-            -evalue 0.1
+            -evalue 0.01
         """
     else if (params.types == 'infernal')
         """
@@ -98,6 +101,7 @@ process getNeighbours {
     
     script:
     """
+    # TODO mkdir neighbour_results
     python ${projectDir}/bin/get_neighbours_script.py \\
         --hit_file $search_result \\
         --input_type ${params.types} \\
@@ -205,7 +209,7 @@ workflow {
     genome_gff_pairs = Channel
         .fromPath("${params.genomes_dir}/*", type: 'dir')
         .map { subfolder -> 
-            def fna = subfolder.listFiles().find { it.name.endsWith('.fna') }
+            def fna = subfolder.listFiles().find { it.name.endsWith('.fasta') }
             def gff = subfolder.listFiles().find { it.name.endsWith('.gff') }
             tuple(subfolder.name, fna, gff)
         }
