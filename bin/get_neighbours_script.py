@@ -4,7 +4,9 @@ from sugar import read_fts, read, Feature
 import argparse
 
 # Constants
-EVALUE_THRESHOLDS = {'blast': 0.1, 'infernal': 0.05}
+EVALUE_THRESHOLDS = {'blast': 0.01, 'infernal': 0.05}
+LEN_THRESHOLDS = {'blast': 40, 'infernal': 20}
+
 FILE_MODES = {
     'protein': ('.protein.mfaa', ['protein_coding', 'pseudogene', 'blast']),
     'srna': ('.srna.mfna', ['tRNA', 'infernal', 'ncRNA'])
@@ -22,7 +24,7 @@ def setup_parser():
     parser.add_argument('--input_type', required=True, 
                       choices=['blastn', 'blastp', 'infernal', 'tblastn'],
                       help='Input file type')
-    parser.add_argument('--gff_file', required=True, help='Path to GFF file')
+    parser.add_argument('--gff_file', required=True, help='Path to GFF or GBK file')
     parser.add_argument('--fna_file', required=True, help='Path to FNA file')
     parser.add_argument('--gene_of_interest', required=True, help='Target gene identifier')
     parser.add_argument('--neighbours', type=str, required=True,
@@ -54,22 +56,14 @@ def process_hits(hit_file, input_type, gene_of_interest):
     params = params_map[input_type]
     features = params['reader']()
     features = features.select(evalue_lt=EVALUE_THRESHOLDS[input_type])
+    features = features.select(len_gt=LEN_THRESHOLDS[input_type])
     features.data = sorted(features, key=params['sort_key'], reverse=True)
     return features
 
 def remove_overlapping_features(features):
     """Remove overlapping features using efficient algorithm."""
     features.data = sorted(features, key=lambda x: (x.seqid, x.loc.start))
-    cleaned = []
-    prev_feature = None
-    
-    for ft in features:
-        if prev_feature and ft.overlaps(prev_feature):
-            continue
-        cleaned.append(ft)
-        prev_feature = ft
-    
-    features.data = cleaned
+    features = features.remove_overlapping()
     return features
 
 def get_orientation(strand):
@@ -78,7 +72,8 @@ def get_orientation(strand):
 
 def generate_entry(feature, goi, counter):
     """Generate TSV entry for a feature."""
-    try:
+
+    if feature.meta._fmt == "gff":
         meta = feature.meta._gff
         fields = [
             f"{feature.seqid}:{counter}",
@@ -88,7 +83,20 @@ def generate_entry(feature, goi, counter):
             get_orientation(feature.loc.strand),
             meta.get('gene_biotype', feature.meta._fmt)
         ]
-    except AttributeError:
+
+    elif feature.meta._fmt == "genbank":
+        meta = feature.meta._genbank
+
+        fields = [
+            f"{feature.seqid}:{counter}",
+            meta.get('product', meta.get('ID', goi)),
+            str(feature.loc.start),
+            str(feature.loc.stop),
+            get_orientation(feature.loc.strand),
+            meta.get('gene_biotype', feature.meta._fmt)
+        ]
+
+    else: #if feature.meta._fmt == "blast":
         fields = [
             f"{feature.seqid}:{counter}",
             goi,
@@ -130,8 +138,13 @@ def get_neighbor_features(features, index, neighbors):
 
 def write_neighbour_data(feature, entry, output_path, seqs, input_type):
     """Write feature data to appropriate output files."""
-    seq = seqs.d[feature.seqid]
-    
+
+    try:
+        seq = seqs.d[feature.seqid]
+    except KeyError:
+        for seq in seqs:
+            seq.id = seq.meta._fasta.header 
+
     # Get sequence
     if input_type == 'tblastn' and feature.meta._fmt == 'blast':
         seq_slice = get_tblastn_sequence(seq, feature)
@@ -139,6 +152,8 @@ def write_neighbour_data(feature, entry, output_path, seqs, input_type):
         seq_slice = seq[feature.loc.start:feature.loc.stop]
         if feature.loc.strand == '-':
             seq_slice = seq_slice.reverse().complement()
+        
+    content = seq_slice
 
     # Write to files
     header = f">{entry.replace('\t', '_')}"
@@ -175,11 +190,11 @@ def main():
     seqs = read(args.fna_file)
     features = process_hits(args.hit_file, args.input_type, args.gene_of_interest)
     features = remove_overlapping_features(features)
-    
+
     # Process genome annotations
-    gff_features = read_fts(args.gff_file, 'gff').select(['gene', 'pseudogene'])
+    gff_features = read_fts(args.gff_file).select(['gene', 'pseudogene', 'CDS'])
     merged = sorted(features + gff_features, key=lambda x: x.loc.start)
-    
+
     process_neighborhood(args, merged, seqs)
 
 if __name__ == '__main__':
