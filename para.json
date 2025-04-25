@@ -1,6 +1,7 @@
 {
     "types" : "infernal",
     "genomes_dir": "/path/to/genome/folders/",
+    "annotation_type": ".gbk",
     "query": "/path/to/file.cm",
     "output_dir" : "/path/to/result/folder/",
     "gene_of_interest": "name_of_gene_of_interest",
