@@ -92,17 +92,27 @@ process runSearch {
 
 // Process to identify neighboring genes
 process getNeighbours {
-    publishDir "${params.output_dir}/neighbour_results", mode: 'copy', pattern: '*_{neighbours_output.tsv,neighbours_output.srna.mfna,neighbours_output.protein.mfaa}'
-
+    //publishDir "${params.output_dir}/neighbour_results", mode: 'copy', pattern: '*_{neighbours_output.tsv,neighbours_output.srna.mfna,neighbours_output.protein.mfaa}'
+    publishDir "${params.output_dir}/neighbour_results/tsv", mode: 'copy', pattern: '*.tsv'
+    publishDir "${params.output_dir}/neighbour_results/protein", mode: 'copy', pattern: '*.mfaa'
+    publishDir "${params.output_dir}/neighbour_results/srna", mode: 'copy', pattern: '*.mfna', saveAs: { fn -> file(fn).exists() ? fn : null }
+    
     input:
-    tuple val(id), path(genome), path(gff), path(search_result)
+        tuple val(id), 
+        path(genome), 
+        path(gff), 
+        path(search_result)
     
     output:
-    tuple val(id), path("${id}_neighbours_output.tsv"), path("${id}_neighbours_output.protein.mfaa"), path("${id}_neighbours_output.srna.mfna")
+        tuple val(id), 
+        path("${id}_neighbours_output.tsv"), 
+        path("${id}_neighbours_output.protein.mfaa"), 
+        path("${id}_neighbours_output.srna.mfna", optional: true)
     
     script:
     """
-    # TODO mkdir neighbour_results
+    mkdir -p "${params.output_dir}/neighbour_results"
+
     python ${projectDir}/bin/get_neighbours_script.py \\
         --hit_file $search_result \\
         --input_type ${params.types} \\
@@ -111,6 +121,9 @@ process getNeighbours {
         --gene_of_interest ${params.gene_of_interest} \\
         --neighbours ${params.neighbours} \\
         --output_path ${id}_neighbours_output
+
+    # Create empty placeholder if srna file missing
+    [ -f "${id}_neighbours_output.srna.mfna" ] || touch "${id}_neighbours_output.srna.mfna"
     """
 }
 
@@ -120,25 +133,26 @@ process clusterColoring {
     publishDir "${params.output_dir}/clustered_results", mode: 'copy', pattern: 'merged_with_color.tsv'
 
     input:
-    path tsv_files
-    path mfna_files
-    path mfaa_files
+        path(tsv_files)
+        path(mfna_files)
+        path(mfaa_files)
 
     output:
-    path "merged_neighbours.tsv"
-    path "merged_neighbours.protein.mfaa"
-    path "merged_neighbours.srna.mfna"
-    path "clusterRes_cluster.tsv"
-    path "merged_with_color.tsv", emit: colored_tsv
+        path 'merged_neighbours.tsv'
+        path 'merged_neighbours.protein.mfaa'
+        path 'merged_neighbours.srna.mfna', optional: true
+        path 'clusterRes_cluster.tsv'
+        path 'merged_with_color.tsv', emit: colored_tsv
 
     script:
     """
+    mkdir -p "${params.output_dir}/clustered_results"
+
     # Merge results
     cat $tsv_files > merged_neighbours.tsv
-    cat $mfna_files > merged_neighbours.srna.mfna
-    cat $mfaa_files > merged_neighbours.protein.mfaa
 
     # Cluster proteins
+    cat $mfaa_files > merged_neighbours.protein.mfaa
     mmseqs createdb \\
         --dbtype 0 merged_neighbours.protein.mfaa \\
         merged_db.protein
@@ -153,29 +167,38 @@ process clusterColoring {
         --cluster-mode 2
 
     # Cluster ncRNAs
-    if [ "${params.cluster_level}" == "sequence_level" ]; then
-        mmseqs createdb \\
-            --dbtype 2 \\
-            merged_neighbours.srna.mfna \\
-            merged_db.srna
-        mkdir tmp.srna
-        mmseqs easy-linclust \\
-            merged_neighbours.srna.mfna \\
-            clusterRes.srna tmp.srna \\
-            --min-seq-id 0.5 \\
-            -c 0.8 \\
-            --cov-mode 0 \\
-            --cluster-mode 2 -k 6 
-    elif [ "${params.cluster_level}" == "secondary_level" ]; then
-        echo "RFAM clustering not implemented yet" # > clusterRes.srna
-        # TODO
-    else
-        echo "Invalid clustering type: ${params.cluster_level}" >&2
-        exit 1
+    # Check if file is not empty
+    if [ ! -s "merged_neighbours.srna.mfna" ]; then
+        cat $mfna_files > merged_neighbours.srna.mfna
+        if [ "${params.cluster_level}" == "sequence_level" ]; then
+            mmseqs createdb \\
+                --dbtype 2 \\
+                merged_neighbours.srna.mfna \\
+                merged_db.srna
+            mkdir tmp.srna
+            mmseqs easy-linclust \\
+                merged_neighbours.srna.mfna \\
+                clusterRes.srna tmp.srna \\
+                --min-seq-id 0.5 \\
+                -c 0.8 \\
+                --cov-mode 0 \\
+                --cluster-mode 2 -k 6 
+        elif [ "${params.cluster_level}" == "secondary_level" ]; then
+            echo "RFAM clustering not implemented yet" # > clusterRes.srna
+            # TODO
+        else
+            echo "Invalid clustering type: ${params.cluster_level}" >&2
+            exit 1
+        fi
+
+        cat *_cluster.tsv > clusterRes_cluster.tsv
+
+    else:
+        cp -i _cluster.tsv clusterRes_cluster.tsv
+
     fi
-
-    cat *_cluster.tsv > clusterRes_cluster.tsv
-
+    
+    
     python ${projectDir}/bin/color_clusters_script.py \\
         --cluster_file clusterRes_cluster.tsv \\
         --tsv_file merged_neighbours.tsv \\
