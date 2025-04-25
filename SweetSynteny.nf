@@ -21,6 +21,7 @@ log.info """
      Search Type      : ${params.types} [blastn, blastp, infernal, tblastn]
      Database         : ${params.genomes_dir}
      Query            : ${params.query}
+     Annotation       : ${params.annotation_type} [GFF or GBK]
     >Parameter for Neighbours
      Gene of interest : ${params.gene_of_interest} [Target gene identifie]
      Neighbours : ${params.neighbours} [Neighbor range: x,y (genes) or x:y (nucleotides)]
@@ -57,7 +58,7 @@ process runSearch {
         """
     else if (params.types == 'blastp')
         """
-        makeblastdb -in $genome -dbtype nucl
+        #makeblastdb -in $genome -dbtype nucl
         blastp \\
             -num_threads $task.cpus \\
             -query ${params.query} \\
@@ -210,7 +211,7 @@ workflow {
         .fromPath("${params.genomes_dir}/*", type: 'dir')
         .map { subfolder -> 
             def fna = subfolder.listFiles().find { it.name.endsWith('.fasta') }
-            def gff = subfolder.listFiles().find { it.name.endsWith('.gff') }
+            def gff = subfolder.listFiles().find { it.name.endsWith("${params.annotation_type}") }
             tuple(subfolder.name, fna, gff)
         }
         .filter { it[1] != null && it[2] != null }
