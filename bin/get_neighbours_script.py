@@ -72,12 +72,16 @@ def get_orientation(strand):
 
 def generate_entry(feature, goi, counter):
     """Generate TSV entry for a feature."""
-
     if feature.meta._fmt == "gff":
         meta = feature.meta._gff
+        try:
+            name = meta.Name
+        except:
+            name = meta.ID
+
         fields = [
             f"{feature.seqid}:{counter}",
-            meta.get('product', meta.get('ID', goi)),
+            name,
             str(feature.loc.start),
             str(feature.loc.stop),
             get_orientation(feature.loc.strand),
@@ -96,7 +100,7 @@ def generate_entry(feature, goi, counter):
             meta.get('gene_biotype', feature.meta._fmt)
         ]
 
-    else: #if feature.meta._fmt == "blast":
+    elif feature.meta._fmt == "blast" or feature.meta._fmt == "infernal": #if feature.meta._fmt == "blast":
         fields = [
             f"{feature.seqid}:{counter}",
             goi,
@@ -124,17 +128,45 @@ def process_neighborhood(args, merged_features, seqs):
 def get_neighbor_features(features, index, neighbors):
     """Retrieve neighboring features based on parameters."""
     if ',' in neighbors:
+        center = features[index]
         up, down = map(int, neighbors.split(','))
-        start = max(0, index - up)
-        stop = min(len(features), index + down + 1)
+        overlaps = []
+        upstream = []
+        downstream = []
+        for f in features:
+            # Skip the blast hit itself
+            if f == center:
+                continue
+            # Overlap check
+            if not (f.loc.stop < center.loc.start or f.loc.start > center.loc.stop):
+                overlaps.append(f)
+            elif f.loc.stop < center.loc.start:
+                upstream.append(f)
+            elif f.loc.start > center.loc.stop:
+                downstream.append(f)
+
+        # Sort upstream by end (closest first), downstream by start (closest first)
+        upstream = sorted(upstream, key=lambda x: -x.loc.stop)
+        downstream = sorted(downstream, key=lambda x: x.loc.start)
+        
+        # Take the closest up/down
+        result = []
+        if up > 0 and len(upstream) > 0:
+            result.extend(upstream[:up])
+        result.extend(overlaps)
+
+        if down > 0 and len(downstream) > 0:
+            result.extend(downstream[:down])
+        
+        result.append(center) # Always include the blast hit itself, in proper order
+        return sorted(result, key=lambda x: x.loc.start)
+
     else:
         up, down = map(int, neighbors.split(':'))
         center = features[index]
         start_pos = center.loc.start - up
         stop_pos = center.loc.stop + down
-        return [ft for ft in features if ft.loc.start >= start_pos and ft.loc.stop <= stop_pos]
-    
-    return features[start:stop]
+        return [ft for ft in features if ft.loc.start >= start_pos and ft.loc.stop <= stop_pos]    
 
 def write_neighbour_data(feature, entry, output_path, seqs, input_type):
     """Write feature data to appropriate output files."""
@@ -192,9 +224,8 @@ def main():
     features = remove_overlapping_features(features)
 
     # Process genome annotations
-    gff_features = read_fts(args.gff_file).select(['gene', 'pseudogene', 'CDS'])
+    gff_features = read_fts(args.gff_file).select(['gene', 'pseudogene']) #'CDS'
     merged = sorted(features + gff_features, key=lambda x: x.loc.start)
-
     process_neighborhood(args, merged, seqs)
 
 if __name__ == '__main__':
