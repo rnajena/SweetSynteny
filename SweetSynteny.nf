@@ -149,6 +149,7 @@ process clusterColoring {
     mkdir -p "${params.output_dir}/clustered_results"
 
     # Merge results
+    ############################################ wird nicht erstellt
     cat $tsv_files > merged_neighbours.tsv
 
     # Cluster proteins
@@ -170,12 +171,15 @@ process clusterColoring {
     # Check if file is not empty
     if [ ! -s "merged_neighbours.srna.mfna" ]; then
         cat $mfna_files > merged_neighbours.srna.mfna
+
         if [ "${params.cluster_level}" == "sequence_level" ]; then
             mmseqs createdb \\
                 --dbtype 2 \\
                 merged_neighbours.srna.mfna \\
                 merged_db.srna
+
             mkdir tmp.srna
+            
             mmseqs easy-linclust \\
                 merged_neighbours.srna.mfna \\
                 clusterRes.srna tmp.srna \\
@@ -183,9 +187,14 @@ process clusterColoring {
                 -c 0.8 \\
                 --cov-mode 0 \\
                 --cluster-mode 2 -k 6 
+
         elif [ "${params.cluster_level}" == "secondary_level" ]; then
-            echo "RFAM clustering not implemented yet" # > clusterRes.srna
-            # TODO
+            cmscan -E 0.01 --cpu 10 --noali --tblout clusterRes.srna Rfam.cm merged_neighbours.srna.mfna
+            # TODO check overwriting
+            python ${projectDir}/bin/postprocess_cmscan.py \
+                --cmscan_file clusterRes.srna \
+                --output_file clusterRes_cluster.tsv
+
         else
             echo "Invalid clustering type: ${params.cluster_level}" >&2
             exit 1
