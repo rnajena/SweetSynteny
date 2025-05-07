@@ -10,11 +10,12 @@ Key features of SweetSynteny:
     1. different number of organisms (from bacteria to eukaryotes)
     2. different searches (`cmsearch` for sRNA or `blast` for protein)
 - Sequence-driven clustering and color-pattern Microsynteny clustering
-    1. on sequence / structur level (-> see Table): `mmseq easy lineclust` [Done] or `cmscan` [TODO for github]
-    2. on microsynteny level: `DBscan` [Done] or `Hierarchical clustering` [TODO for github]
+    1. on sequence / structur level (-> see Table): `mmseq easy lineclust` [Done] or `cmscan` [Done]
+    2. on microsynteny level: `DBscan` [Done]
+    3. on global level: umap comparing microsynteny cluster [Done]
 - Comprehensive results:
     1. phylogenetic trees using `ete3` [TODO for github]
-    2. statistical summaries
+    2. statistical summaries and umap
     3. microsynteny plots
     4. statistics on the similarity of the microsynteny locations
 
