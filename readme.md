@@ -29,7 +29,7 @@ So, as you can see, with SweetSynteny, your Microsynteny analysis will be, well.
 
 ## Graphical Workflow
 
-![Workflow graph](/fig/workflow.png)
+![Workflow graph](/fig/workflow.2.png)
 
 ## Dependencies and installation
 The pipeline is written in Nextflow. In order to run `SweetSynteny`, I recommend creating a conda environment dedicated for NextFlow.
