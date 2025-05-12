@@ -120,15 +120,46 @@ def process_neighborhood(args, merged_features, seqs):
             
         neighbors = get_neighbor_features(merged_features, idx, args.neighbours)
         
-        for neighbor in neighbors:
-            entry = generate_entry(neighbor, args.gene_of_interest, counter)
-            write_neighbour_data(neighbor, entry, args.output_path, seqs, args.input_type)
-        counter = counter + 1
+        if neighbors != []:
+            for neighbor in neighbors:
+                entry = generate_entry(neighbor, args.gene_of_interest, counter)
+                write_neighbour_data(neighbor, entry, args.output_path, seqs, args.input_type)
+            counter = counter + 1
+
+def check_overlap(center, overlaps):
+    """Overlap length must exceed 50% of the center gene's length."""
+
+    new_list = []
+    center_loc = center.loc
+    c_start, c_stop = center_loc.start, center_loc.stop
+    c_length = c_stop - c_start + 1
+
+    for gene in overlaps:
+        gene_loc = gene.loc
+        g_start, g_end = gene_loc.start, gene_loc.stop
+        g_length = g_end - g_start + 1
+
+        # Calculate overlap
+        overlap_start = max(c_start, g_start)
+        overlap_stop = min(c_stop, g_end)
+        if overlap_start > overlap_stop:
+            continue  # No overlap
+        overlap_length = overlap_stop - overlap_start + 1
+
+        # Check bidirectional overlap percentages
+        center_percent = overlap_length / c_length
+        gene_percent = overlap_length / g_length
+        if center_percent > 0.5 and gene_percent > 0.5:
+            new_list.append(gene)
+
+    return new_list
 
 def get_neighbor_features(features, index, neighbors):
     """Retrieve neighboring features based on parameters."""
+
     if ',' in neighbors:
         center = features[index]
+
         up, down = map(int, neighbors.split(','))
         overlaps = []
         upstream = []
@@ -137,28 +168,38 @@ def get_neighbor_features(features, index, neighbors):
             # Skip the blast hit itself
             if f == center:
                 continue
-            # Overlap check
-            if not (f.loc.stop < center.loc.start or f.loc.start > center.loc.stop):
-                overlaps.append(f)
-            elif f.loc.stop < center.loc.start:
-                upstream.append(f)
-            elif f.loc.start > center.loc.stop:
-                downstream.append(f)
+            if center.seqid == f.seqid:
+                # Overlap check
+                if not (f.loc.stop < center.loc.start or f.loc.start > center.loc.stop):
+                    overlaps.append(f)
+                elif f.loc.stop < center.loc.start:
+                    upstream.append(f)
+                elif f.loc.start > center.loc.stop:
+                    downstream.append(f)
+        
+        overlaps_filtered = []
+        if overlaps:  # There are overlaps
+            overlaps_filtered = check_overlap(center, overlaps)
+            if not overlaps_filtered:
+                return []  # Overlaps exist, but none pass the 50% filter
+
+        # If no overlaps, or if some pass the filter, proceed with up/down
+        result = []
+        
+        result.extend(overlaps_filtered)
 
         # Sort upstream by end (closest first), downstream by start (closest first)
         upstream = sorted(upstream, key=lambda x: -x.loc.stop)
         downstream = sorted(downstream, key=lambda x: x.loc.start)
-        
-        # Take the closest up/down
-        result = []
+
         if up > 0 and len(upstream) > 0:
             result.extend(upstream[:up])
-        result.extend(overlaps)
 
         if down > 0 and len(downstream) > 0:
             result.extend(downstream[:down])
-        
-        result.append(center) # Always include the blast hit itself, in proper order
+
+        result.append(center)  # Always include the center gene
+
         return sorted(result, key=lambda x: x.loc.start)
 
     else:
