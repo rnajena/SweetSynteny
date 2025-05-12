@@ -5,6 +5,11 @@ from sklearn.cluster import DBSCAN
 import matplotlib.pyplot as plt
 from sugar import Feature, FeatureList
 import umap
+import os
+
+from scipy.cluster.hierarchy import linkage, dendrogram, fcluster
+from scipy.spatial.distance import pdist
+import matplotlib.pyplot as plt
 
 def setup_parser_func():
     """Set up and return the argument parser."""
@@ -28,7 +33,6 @@ def map_ori_func(value):
 def process_group_func(group, gene_of_interest):
     """Process a group of rows, adjusting orientations and positions."""
     center_row = group[group['gene'] == gene_of_interest]
-
     if not center_row.empty and center_row.iloc[0]['orientation'] == '-':
         group.loc[group['gene'] != gene_of_interest, 'orientation'] = group.loc[group['gene'] != gene_of_interest, 'orientation'].map({'+': '-', '-': '+'})
         group.loc[group['gene'] == gene_of_interest, 'orientation'] = '+'
@@ -47,21 +51,45 @@ def prepare_dataframe_func(input_file):
     df['orientation'] = df['orientation'].apply(map_ori_func)
     return df
 
-def cluster_genomes_func(df, cluster=2, threshold=0.3):
+def cluster_genomes_func(df, output_path, output_ending, cluster=2, threshold=0.3):
     """Cluster genomes based on feature matrix."""
 
     unique_colors = df['cluster_color'].unique()
     unique_genomes = df["genome"].unique()
     feature_matrix_color = pd.DataFrame(0, index=unique_genomes, columns=unique_colors)
-
+    
     for _, row in df.iterrows():
         feature_matrix_color.at[row["genome"], row["cluster_color"]] = 1
     
-    feature_matrix_color.drop(columns=["#FFFFFF"], inplace=True)
+    #feature_matrix_color.drop(columns=["#FFFFFF"], inplace=True)
+    #db = DBSCAN(eps=threshold, min_samples=cluster, metric='cosine').fit(feature_matrix_color)
 
-    db = DBSCAN(eps=threshold, min_samples=cluster, metric='cosine').fit(feature_matrix_color)
+    X = feature_matrix_color.values
+    # Compute pairwise Jaccard distances
+    distance_matrix = pdist(X, metric='jaccard')
 
-    return db.labels_, feature_matrix_color
+    # Perform hierarchical clustering
+    Z = linkage(distance_matrix, method='average')
+
+    # Plot dendrogram with a horizontal line at your chosen height
+    plt.figure(figsize=(8, 4))
+    dendrogram(Z, labels=feature_matrix_color.index.tolist())
+    plt.title('Hierarchical Clustering Dendrogram')
+    plt.xlabel('Sample')
+    plt.ylabel('Jaccard Distance')
+
+    # Choose a height (distance) to cut the tree
+    cut_height = 0.75  # Adjust this value based on your dendrogram
+    plt.axhline(y=cut_height, color='r', linestyle='--', label=f'Cut at {cut_height}')
+    plt.legend()
+    plt.tight_layout()
+    plt.savefig(f"{output_path}_Tree.{output_ending}")
+    plt.close()
+
+    # Assign clusters based on the chosen height
+    l = fcluster(Z, t=cut_height, criterion='distance')
+
+    return l, feature_matrix_color #return db.labels_, feature_matrix_color
 
 def plot_umap(feature_matrix_color, labels, output_path, output_ending):
     # Assuming feature_matrix from your clustering function
@@ -69,17 +97,26 @@ def plot_umap(feature_matrix_color, labels, output_path, output_ending):
         n_neighbors=15,        # Balance local/global structure
         min_dist=0.1,          # Controls cluster tightness
         random_state=42,       # Reproducibility
-        metric='jaccard'       # Optimal for binary presence/absence data
+        metric='cosine'       # Optimal for binary presence/absence data
     )
 
     embedding = reducer.fit_transform(feature_matrix_color)
-    plt.scatter(embedding[:,0], embedding[:,1], c=labels, cmap='Spectral')
+
+    # Create scatter plot with labels
+    scatter = plt.scatter(
+        embedding[:, 0], embedding[:, 1],
+        c=labels, cmap='Spectral', label=labels
+    )
+
+    # Create a  legend for unique labels
+    handles, unique_labels = scatter.legend_elements(prop="colors")
+
+    plt.legend(handles, np.unique(labels), title="Cluster")
     plt.title('Microsynteny Clusters in UMAP Space')
     plt.xlabel('UMAP1')
     plt.ylabel('UMAP2')
     plt.savefig(f"{output_path}_UMAP.{output_ending}")
     plt.close()
-
 
 def plot_cluster_func(cluster_df, output_path, output_ending, scale, gene_of_interest, max_subplots=20):
     """Generate plots for a cluster."""
@@ -87,27 +124,20 @@ def plot_cluster_func(cluster_df, output_path, output_ending, scale, gene_of_int
     num_subplots = int(np.ceil(len(genome_groups) / max_subplots))
 
     for subplot_idx in range(num_subplots):
-        subplot_genomes = genome_groups[subplot_idx * max_subplots: (subplot_idx + 1) * max_subplots]
-        max_distance = compute_max_distance_func(subplot_genomes, scale)
+        subplot_genomes = genome_groups[subplot_idx * max_subplots: (subplot_idx) * max_subplots]
         
         fig, axes = plt.subplots(len(subplot_genomes), 1, figsize=(10, len(subplot_genomes) * 0.9))
         axes = [axes] if len(subplot_genomes) == 1 else axes
 
         for i, (genome_name, genome_df) in enumerate(subplot_genomes):
-            plot_genome_func(genome_df, axes[i], scale, max_distance, gene_of_interest)
+            plot_genome_func(genome_df, axes[i], scale, gene_of_interest)
 
         plt.tight_layout()
-        count = f"{cluster_df['cluster_label'].iloc[0]+1}.{subplot_idx + 1}"
+        count = f"{cluster_df['cluster_label'].iloc[0]}.{subplot_idx}"
         plt.savefig(f"{output_path}_{count}.{output_ending}")
         plt.close(fig)
 
-def compute_max_distance_func(genome_groups, scale):
-    """Compute the maximum distance for scaling."""
-    if scale.lower() == 'no':
-        return max(genome_df['end'].max() - genome_df['start'].min() for _, genome_df in genome_groups) / 1000
-    return 0
-
-def plot_genome_func(genome_df, ax, scale, max_distance, gene_of_interest):
+def plot_genome_func(genome_df, ax, scale, gene_of_interest):
     """Plot a single genome."""
     df = genome_df.sort_values(by=['start'])
     min_start = df['start'].min()
@@ -158,6 +188,12 @@ def cosine_similarity(matrix):
 
     return similarity_matrix
 
+def write_labels(df, gene_of_interest, output_path):
+    center_row = df[df['gene'] == gene_of_interest]
+    output_file = output_path + '_gene_of_interest.tsv'
+    # Check if the file exists to decide whether to write the header
+    write_header = not os.path.exists(output_file)
+    center_row.to_csv(output_path + '_gene_of_interest.tsv', mode='a', header=write_header, sep='\t', index=False)
 
 def main():
         parser = setup_parser_func()
@@ -166,7 +202,7 @@ def main():
         #try:
         df = prepare_dataframe_func(args.input_file)
 
-        labels, feature_matrix_color = cluster_genomes_func(df, args.cluster, args.threshold)
+        labels, feature_matrix_color = cluster_genomes_func(df, args.output_path, args.output_ending, args.cluster, args.threshold)
         
         plot_umap(feature_matrix_color, labels, args.output_path, args.output_ending)
 
@@ -176,6 +212,7 @@ def main():
         df["cluster_label"] = df["genome"].map(genome_to_cluster)
 
         for cluster_label, cluster_df in df.groupby("cluster_label"):
+            write_labels(cluster_df, args.gene_of_interest, args.output_path)
             plot_cluster_func(cluster_df, args.output_path, args.output_ending, args.scale, args.gene_of_interest)
 
         cluster_stats = []
@@ -223,32 +260,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-"""
-python /home/we93kif/maria_projects/SweetSynteny/bin/plot_context_script.py \
---scale no \
---input_file /home/we93kif/maria_projects/7_kathi/nf_result/clustered_results/merged_with_color.tsv \
---output_path /home/we93kif/maria_projects/7_kathi/fig/crfA \
---output_ending png \
---cluster 2 \
---threshold 0.3
-
-python /home/we93kif/maria_projects/SweetSynteny/bin/plot_context_script.py \
---scale no \
---input_file /data/fass5/projects/ProjectFroehlich/data/result/redo_merged_and_clustered_crfa5/merged_with_color.tsv \
---output_path /home/we93kif/maria_projects/7_kathi/fig/crfA \
---output_ending svg \
---cluster 2 \
---threshold 0.3
-
-python /home/we93kif/maria_projects/SweetSynteny/bin/plot_context_script.py \
---scale no \
---input_file /home/we93kif/maria_projects/7_kathi/nf_result/clustered_results/test.tsv \
---output_path /home/we93kif/maria_projects/7_kathi/fig/test \
---output_ending svg \
---cluster 2 \
---threshold 0.3
-
-Namespace(scale='no', input_file='/home/we93kif/maria_projects/7_kathi/nf_result/clustered_results/merged_with_color.tsv', output_path='/home/we93kif/maria_projects/SweetSynteny/test/t', output_ending='png', cluster=2, threshold=0.3)
-An error occurred: name 'cluster' is not defined
-"""
