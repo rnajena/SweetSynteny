@@ -20,7 +20,10 @@ def setup_parser_func():
     parser.add_argument('--output_ending', required=True, choices=['png', 'svg'], help='Final plot format')
     parser.add_argument('--cluster', type=int, default=2, help='Minimal size for a cluster')
     parser.add_argument('--threshold', type=float, default=0.3, help='Similarity threshold for clustering')
-    parser.add_argument('--gene_of_interest', required=True, help='gene_of_interest')
+    parser.add_argument('--gene_of_interest', required=True, help='gene_of_interest') 
+    parser.add_argument('--name_file', required=False, help='Renaming contigs to genome names')
+    parser.add_argument('--gene_lable', required=False, choices=['yes', 'no'], help='Add lables to gene [no as default]') #cut_height_args
+    parser.add_argument('--cut_height_args', type=float, default=0.5, help='Cut threshold for dendogram clustering.')
     return parser
 
 def map_ori_func(value):
@@ -33,6 +36,7 @@ def map_ori_func(value):
 def process_group_func(group, gene_of_interest):
     """Process a group of rows, adjusting orientations and positions."""
     center_row = group[group['gene'] == gene_of_interest]
+    
     if not center_row.empty and center_row.iloc[0]['orientation'] == '-':
         group.loc[group['gene'] != gene_of_interest, 'orientation'] = group.loc[group['gene'] != gene_of_interest, 'orientation'].map({'+': '-', '-': '+'})
         group.loc[group['gene'] == gene_of_interest, 'orientation'] = '+'
@@ -42,16 +46,26 @@ def process_group_func(group, gene_of_interest):
 
     return group
 
-def prepare_dataframe_func(input_file):
+def prepare_dataframe_func(input_file, genome_name_tsv=""):
     """Read and prepare the input dataframe."""
     header = ['genome', 'gene', 'start', 'end', 'orientation', 'type', 'cluster_color']
     df = pd.read_csv(input_file, sep='\t', header=None, names=header)
     df['length'] = abs(df['start'] - df['end'])
-    df['genome_name'] = df['genome'].str.split(':', n=1).str[0]
+    df['contig'] = df['genome'].str.split(':', n=1).str[0]
     df['orientation'] = df['orientation'].apply(map_ori_func)
+
+    if genome_name_tsv != "":
+        rename_df = pd.read_csv(genome_name_tsv, sep='\t')
+        merged = df.merge(rename_df[['contig', 'organism_name']], 
+                        on='contig', 
+                        how='left')
+    else:
+        merged['organism_name'] = np.nan
+
+    df = merged
     return df
 
-def cluster_genomes_func(df, output_path, output_ending, cluster=2, threshold=0.3):
+def cluster_genomes_func(df, output_path, output_ending, cut_height_args=0.5, cluster=2, threshold=0.3):
     """Cluster genomes based on feature matrix."""
 
     unique_colors = df['cluster_color'].unique()
@@ -61,35 +75,67 @@ def cluster_genomes_func(df, output_path, output_ending, cluster=2, threshold=0.
     for _, row in df.iterrows():
         feature_matrix_color.at[row["genome"], row["cluster_color"]] = 1
     
-    #feature_matrix_color.drop(columns=["#FFFFFF"], inplace=True)
+    feature_matrix_color.drop(columns=["#FFFFFF"], inplace=True)
     #db = DBSCAN(eps=threshold, min_samples=cluster, metric='cosine').fit(feature_matrix_color)
 
     X = feature_matrix_color.values
     # Compute pairwise Jaccard distances
     distance_matrix = pdist(X, metric='jaccard')
 
+    # Try with cosine - Remove genomes with no features
+    #feature_matrix_color = feature_matrix_color.loc[feature_matrix_color.sum(axis=1) > 0]
+    #X = feature_matrix_color.values
+    #distance_matrix = pdist(X, metric='cosine')
+    #if not np.all(np.isfinite(distance_matrix)):
+    #    raise ValueError("Distance matrix contains non-finite values. Check your input data for all-zero rows.")
+
     # Perform hierarchical clustering
     Z = linkage(distance_matrix, method='average')
-
+    
+    # Create a mapping from genome to organism_name and Get the organism names in the same order as feature_matrix_color.index
+    genome_to_organism = df.set_index("genome")["organism_name"].to_dict()
+    dendro_labels = [genome_to_organism.get(genome, genome) for genome in feature_matrix_color.index]
+    
     # Plot dendrogram with a horizontal line at your chosen height
-    plt.figure(figsize=(8, 4))
-    dendrogram(Z, labels=feature_matrix_color.index.tolist())
-    plt.title('Hierarchical Clustering Dendrogram')
-    plt.xlabel('Sample')
+    plt.figure(figsize=(10, 6), dpi=750)
+    dendrogram(Z, labels=dendro_labels) #labels=feature_matrix_color.index.tolist())
+    plt.title('Clustering Dendrogram')
+    plt.xlabel('Genomes')
     plt.ylabel('Jaccard Distance')
 
     # Choose a height (distance) to cut the tree
-    cut_height = 0.75  # Adjust this value based on your dendrogram
+    cut_height = cut_height_args  # Adjust this value based on your dendrogram
     plt.axhline(y=cut_height, color='r', linestyle='--', label=f'Cut at {cut_height}')
     plt.legend()
     plt.tight_layout()
-    plt.savefig(f"{output_path}_Tree.{output_ending}")
+    plt.savefig(f"{output_path}.Tree.{output_ending}")
     plt.close()
 
     # Assign clusters based on the chosen height
     l = fcluster(Z, t=cut_height, criterion='distance')
+    
+    # Assign -1 to genomes with only one color
+    cluster_labels = pd.Series(l, index=feature_matrix_color.index)
+    for genome in feature_matrix_color.index:
+        if feature_matrix_color.loc[genome].sum() == 1:
+            cluster_labels[genome] = -1
+        if feature_matrix_color.loc[genome].sum() == 0:
+            cluster_labels[genome] = -2
+            
+    reducer = umap.UMAP(random_state=42)
+    embedding = reducer.fit_transform(feature_matrix_color.values)
 
-    return l, feature_matrix_color #return db.labels_, feature_matrix_color
+    # Plot, coloring by cluster labels
+    plt.scatter(embedding[:, 0], embedding[:, 1], c=cluster_labels, cmap='tab10')
+    plt.title('UMAP projection of Genomes')
+    plt.xlabel('UMAP-1')
+    plt.ylabel('UMAP-2')
+    plt.tight_layout()    
+    plt.savefig(f"{output_path}.UMAP.{output_ending}")
+    plt.close()
+
+    return cluster_labels.values, feature_matrix_color
+    #return l, feature_matrix_color #return db.labels_, feature_matrix_color
 
 def plot_umap(feature_matrix_color, labels, output_path, output_ending):
     # Assuming feature_matrix from your clustering function
@@ -118,28 +164,38 @@ def plot_umap(feature_matrix_color, labels, output_path, output_ending):
     plt.savefig(f"{output_path}_UMAP.{output_ending}")
     plt.close()
 
-def plot_cluster_func(cluster_df, output_path, output_ending, scale, gene_of_interest, max_subplots=20):
+def plot_cluster_func(cluster_df, output_path, output_ending, scale, gene_of_interest, gene_lable, max_subplots=20):
     """Generate plots for a cluster."""
     genome_groups = list(cluster_df.groupby("genome"))
     num_subplots = int(np.ceil(len(genome_groups) / max_subplots))
 
     for subplot_idx in range(num_subplots):
-        subplot_genomes = genome_groups[subplot_idx * max_subplots: (subplot_idx) * max_subplots]
+        subplot_genomes = genome_groups[
+            subplot_idx * max_subplots: (subplot_idx + 1) * max_subplots
+        ]
         
+        if not subplot_genomes:  # Added validation
+            continue
+            
         fig, axes = plt.subplots(len(subplot_genomes), 1, figsize=(10, len(subplot_genomes) * 0.9))
         axes = [axes] if len(subplot_genomes) == 1 else axes
 
         for i, (genome_name, genome_df) in enumerate(subplot_genomes):
-            plot_genome_func(genome_df, axes[i], scale, gene_of_interest)
+            plot_genome_func(genome_df, axes[i], scale, gene_of_interest, gene_lable)
+            unique_organisms_name = genome_df['organism_name'].unique().tolist()[0]
+            #axes[i].text(5, 0.5, unique_organisms_name, fontsize=12, ha='center', fontstyle='italic')
+            axes[i].set_title(unique_organisms_name, fontstyle='italic', loc='left')
 
         plt.tight_layout()
         count = f"{cluster_df['cluster_label'].iloc[0]}.{subplot_idx}"
         plt.savefig(f"{output_path}_{count}.{output_ending}")
         plt.close(fig)
 
-def plot_genome_func(genome_df, ax, scale, gene_of_interest):
+
+def plot_genome_func(genome_df, ax, scale, gene_of_interest, gene_lable='no'):
     """Plot a single genome."""
     df = genome_df.sort_values(by=['start'])
+    df['organism_name'] = genome_df['organism_name']
     min_start = df['start'].min()
     df['start'] = df['start'].astype(int)
     df['length'] = df['length'].astype(int)
@@ -161,50 +217,50 @@ def plot_genome_func(genome_df, ax, scale, gene_of_interest):
     df = process_group_func(df, gene_of_interest)
 
     features = [Feature(row.type, start=row.adjusted_start, stop=row.adjusted_end, strand=row.orientation,
-                        meta={'seqid': row.genome_name, 'name': row.gene, 'cluster_color': row.cluster_color})
+                        meta={'seqid': row.contig, 'organism_name': row.organism_name, 'name': row.gene, 'cluster_color': row.cluster_color})
                 for _, row in df.iterrows()]
 
     color_dic = dict(zip(df['gene'], df['cluster_color']))
 
-    FeatureList(features).plot_ftsviewer(ax=ax, label=None, colorby='name', color=color_dic,
+    if gene_lable=='no':
+        FeatureList(features).plot_ftsviewer(ax=ax, label=None, 
+                                        colorby='name', color=color_dic,
+                                        seqlen=seqlen_distance, figsize=(7, 5),
+                                        with_ruler=False, show=False)
+    else:
+        FeatureList(features).plot_ftsviewer(ax=ax, label='name', 
+                                        colorby='name', color=color_dic,
                                         seqlen=seqlen_distance, figsize=(7, 5),
                                         with_ruler=False, show=False)
 
 def cosine_similarity(matrix):
-    # Calculate norms of vectors
+    # Calculate norms of vectors & Scalar product matrix & External product norms
     norms = np.linalg.norm(matrix, axis=1)
-
-    # Scalar product matrix
     dot_products = np.dot(matrix, matrix.T)
-
-    # External product norms
     norm_matrix = np.outer(norms, norms)
 
     # Elementwise division -> Cosine similarity matrix
     similarity_matrix = np.divide(dot_products, norm_matrix, where=norm_matrix != 0)
-
-    # avoid division by 0
     similarity_matrix[norm_matrix == 0] = 0.0
 
     return similarity_matrix
 
 def write_labels(df, gene_of_interest, output_path):
     center_row = df[df['gene'] == gene_of_interest]
-    output_file = output_path + '_gene_of_interest.tsv'
-    # Check if the file exists to decide whether to write the header
-    write_header = not os.path.exists(output_file)
-    center_row.to_csv(output_path + '_gene_of_interest.tsv', mode='a', header=write_header, sep='\t', index=False)
+    new_df = center_row[['cluster_label', 'organism_name', 'contig', 'gene', 'start', 'end', 'orientation']]
+    write_header = not os.path.exists(f'{output_path}_gene_of_interest.tsv')     # Check if the file exists to decide whether to write the header
+    new_df.to_csv(f'{output_path}_gene_of_interest.tsv', mode='a', header=write_header, sep='\t', index=False)
 
 def main():
         parser = setup_parser_func()
         args = parser.parse_args()
 
         #try:
-        df = prepare_dataframe_func(args.input_file)
+        df = prepare_dataframe_func(args.input_file, args.name_file)
 
-        labels, feature_matrix_color = cluster_genomes_func(df, args.output_path, args.output_ending, args.cluster, args.threshold)
+        labels, feature_matrix_color = cluster_genomes_func(df, args.output_path, args.output_ending, args.cut_height_args, args.cluster, args.threshold)
         
-        plot_umap(feature_matrix_color, labels, args.output_path, args.output_ending)
+        #plot_umap(feature_matrix_color, labels, args.output_path, args.output_ending)
 
         # correlation of cluster labels to each genome
         genome_to_cluster = pd.Series(labels, index=feature_matrix_color.index).groupby(level=0).first()
@@ -213,7 +269,7 @@ def main():
 
         for cluster_label, cluster_df in df.groupby("cluster_label"):
             write_labels(cluster_df, args.gene_of_interest, args.output_path)
-            plot_cluster_func(cluster_df, args.output_path, args.output_ending, args.scale, args.gene_of_interest)
+            plot_cluster_func(cluster_df, args.output_path, args.output_ending, args.scale, args.gene_of_interest, args.gene_lable)
 
         cluster_stats = []
 
@@ -259,4 +315,4 @@ def main():
     #    print(f"An error occurred: {str(e)}")
 
 if __name__ == "__main__":
-    main()
+    main(
