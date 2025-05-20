@@ -2,10 +2,15 @@ import argparse
 import pandas as pd
 import numpy as np
 from sklearn.cluster import DBSCAN
+from sklearn.preprocessing import StandardScaler
+from sklearn.decomposition import PCA
 import matplotlib.pyplot as plt
 from sugar import Feature, FeatureList
 import umap
 import os
+
+# Create legend handles
+from matplotlib.patches import Patch
 
 from scipy.cluster.hierarchy import linkage, dendrogram, fcluster
 from scipy.spatial.distance import pdist
@@ -53,16 +58,16 @@ def prepare_dataframe_func(input_file, genome_name_tsv=""):
     df['length'] = abs(df['start'] - df['end'])
     df['contig'] = df['genome'].str.split(':', n=1).str[0]
     df['orientation'] = df['orientation'].apply(map_ori_func)
-
-    if genome_name_tsv != "":
+    
+    if genome_name_tsv:
         rename_df = pd.read_csv(genome_name_tsv, sep='\t')
         merged = df.merge(rename_df[['contig', 'organism_name']], 
                         on='contig', 
                         how='left')
+        df = merged
     else:
-        merged['organism_name'] = np.nan
-
-    df = merged
+        df['organism_name'] = ""
+    
     return df
 
 def cluster_genomes_func(df, output_path, output_ending, cut_height_args=0.5, cluster=2, threshold=0.3):
@@ -74,23 +79,15 @@ def cluster_genomes_func(df, output_path, output_ending, cut_height_args=0.5, cl
     
     for _, row in df.iterrows():
         feature_matrix_color.at[row["genome"], row["cluster_color"]] = 1
-    
-    feature_matrix_color.drop(columns=["#FFFFFF"], inplace=True)
-    #db = DBSCAN(eps=threshold, min_samples=cluster, metric='cosine').fit(feature_matrix_color)
 
     X = feature_matrix_color.values
+
     # Compute pairwise Jaccard distances
     distance_matrix = pdist(X, metric='jaccard')
-
-    # Try with cosine - Remove genomes with no features
-    #feature_matrix_color = feature_matrix_color.loc[feature_matrix_color.sum(axis=1) > 0]
-    #X = feature_matrix_color.values
-    #distance_matrix = pdist(X, metric='cosine')
-    #if not np.all(np.isfinite(distance_matrix)):
-    #    raise ValueError("Distance matrix contains non-finite values. Check your input data for all-zero rows.")
+    #distance_matrix = squareform(jaccard_dist)
 
     # Perform hierarchical clustering
-    Z = linkage(distance_matrix, method='average')
+    Z = linkage(distance_matrix, method='ward')
     
     # Create a mapping from genome to organism_name and Get the organism names in the same order as feature_matrix_color.index
     genome_to_organism = df.set_index("genome")["organism_name"].to_dict()
@@ -98,7 +95,7 @@ def cluster_genomes_func(df, output_path, output_ending, cut_height_args=0.5, cl
     
     # Plot dendrogram with a horizontal line at your chosen height
     plt.figure(figsize=(10, 6), dpi=750)
-    dendrogram(Z, labels=dendro_labels) #labels=feature_matrix_color.index.tolist())
+    dendrogram(Z, labels=dendro_labels, leaf_rotation=90)
     plt.title('Clustering Dendrogram')
     plt.xlabel('Genomes')
     plt.ylabel('Jaccard Distance')
@@ -130,12 +127,12 @@ def cluster_genomes_func(df, output_path, output_ending, cut_height_args=0.5, cl
     plt.title('UMAP projection of Genomes')
     plt.xlabel('UMAP-1')
     plt.ylabel('UMAP-2')
-    plt.tight_layout()    
+    plt.tight_layout()  
     plt.savefig(f"{output_path}.UMAP.{output_ending}")
-    plt.close()
+    plt.close()  
 
     return cluster_labels.values, feature_matrix_color
-    #return l, feature_matrix_color #return db.labels_, feature_matrix_color
+    # from logisticpca import LogisticPCA
 
 def plot_umap(feature_matrix_color, labels, output_path, output_ending):
     # Assuming feature_matrix from your clustering function
@@ -170,6 +167,7 @@ def plot_cluster_func(cluster_df, output_path, output_ending, scale, gene_of_int
     num_subplots = int(np.ceil(len(genome_groups) / max_subplots))
 
     for subplot_idx in range(num_subplots):
+        merged = {} # Merge all color dictionaries
         subplot_genomes = genome_groups[
             subplot_idx * max_subplots: (subplot_idx + 1) * max_subplots
         ]
@@ -181,14 +179,23 @@ def plot_cluster_func(cluster_df, output_path, output_ending, scale, gene_of_int
         axes = [axes] if len(subplot_genomes) == 1 else axes
 
         for i, (genome_name, genome_df) in enumerate(subplot_genomes):
-            plot_genome_func(genome_df, axes[i], scale, gene_of_interest, gene_lable)
+            dicts_subplot = plot_genome_func(genome_df, axes[i], scale, gene_of_interest, gene_lable)
+            merged.update(dicts_subplot)
             unique_organisms_name = genome_df['organism_name'].unique().tolist()[0]
-            #axes[i].text(5, 0.5, unique_organisms_name, fontsize=12, ha='center', fontstyle='italic')
             axes[i].set_title(unique_organisms_name, fontstyle='italic', loc='left')
+        
+        if gene_lable=='no': # Add legend to the subplot
+            legend_handles = [
+                Patch(facecolor=color, label=label)
+                for label, color in merged.items()
+                if isinstance(color, tuple) and len(color) == 3 and all(0 <= c <= 1 for c in color)
+            ]
+            fig.legend(handles=legend_handles, title="Legend", bbox_to_anchor=(1.05, 1), loc='upper left')
 
         plt.tight_layout()
         count = f"{cluster_df['cluster_label'].iloc[0]}.{subplot_idx}"
-        plt.savefig(f"{output_path}_{count}.{output_ending}")
+        fig.savefig(f"{output_path}_{count}.{output_ending}", bbox_inches='tight')
+
         plt.close(fig)
 
 
@@ -231,7 +238,10 @@ def plot_genome_func(genome_df, ax, scale, gene_of_interest, gene_lable='no'):
         FeatureList(features).plot_ftsviewer(ax=ax, label='name', 
                                         colorby='name', color=color_dic,
                                         seqlen=seqlen_distance, figsize=(7, 5),
-                                        with_ruler=False, show=False)
+                                        with_ruler=False, show=False, 
+                                        labels_spacing=60, fontdict={'fontsize': 7})
+    
+    return color_dic
 
 def cosine_similarity(matrix):
     # Calculate norms of vectors & Scalar product matrix & External product norms
@@ -315,4 +325,4 @@ def main():
     #    print(f"An error occurred: {str(e)}")
 
 if __name__ == "__main__":
-    main(
+    main()
