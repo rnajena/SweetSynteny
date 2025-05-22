@@ -113,9 +113,9 @@ def extract_and_save_promoter_regions(args, feature, seq, entry):
     if feature.loc.strand == '-':
         promoter_seq = promoter_seq.reverse().complement()
 
-    with open(f'{output_file}.mfna', 'a') as mfna_file:
+    with open(f'{output_file}', 'a') as mfna_file:
         mfna_file.write(header)
-        mfna_file.write(str(promoter_seq))
+        mfna_file.write(str(promoter_seq) + '\n')
 
     # Write annotation entry to TSV
     with open(f'{args.output_path}.tsv', 'a') as tsv_file:
@@ -271,8 +271,6 @@ def main():
     features = remove_overlapping_features(features)
 
     # Read genome annotation (GFF/GBK)
-    print(type(args.including_features))
-    print(args.including_features)
     gff_features = read_fts(args.gff_file).select(args.including_features)
     # Merge BLAST/infernal hits and annotation features
     merged = sorted(list(features) + list(gff_features), key=lambda x: x.loc.start)
