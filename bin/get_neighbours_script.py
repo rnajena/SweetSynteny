@@ -29,7 +29,7 @@ def setup_parser():
     parser.add_argument('--output_path', required=True, help='Base path for output files')
     parser.add_argument('--promoter', type=str, default='no', choices=['yes', 'no'], help='Include promoter region?')
     parser.add_argument('--promoter_len', type=int, default=100, help='Promoter region length (default: 100 nt)')
-    parser.add_argument('--including_features', type=list, default=['genes', 'pseudogene', 'ncRNA'], 
+    parser.add_argument('--including_features', type=list, default=['gene', 'pseudogene', 'ncRNA'], 
                         help='Include GFF features like genes, pseudogene, ncRNA. Maybe add CDS or tRNA.')
     parser.add_argument('--evalue_threshold_blast', type=float, default=0.01, help='E-value threshold for BLAST hits')
     parser.add_argument('--evalue_threshold_infernal', type=float, default=0.05, help='E-value threshold for Infernal hits')
@@ -104,10 +104,11 @@ def extract_and_save_promoter_regions(args, feature, seq, entry):
     """ Extract promoter regions for the gene of interest and write them to a new mfna file. """
     output_file = f"{args.output_path}.promoter.mfna"
 
-    promoter_entry = f'>{entry.split()[0]}\t{entry.split()[1]}\t{promoter_start}\t{feature.loc.start-1}\t{entry.split()[4]}\tpromoter'
-    header = f'>{promoter_entry.replace("\t", "_")}\n'
-
     promoter_start = max(0, feature.loc.start - args.promoter_len)
+
+    promoter_entry = f'{entry.split()[0]}\t{entry.split()[1]}\t{promoter_start}\t{feature.loc.start-1}\t{entry.split()[4]}\tpromoter\n'
+    header = f'>{promoter_entry.replace("\t", "_")}'
+
     promoter_seq = seq[promoter_start:feature.loc.start-1]
     if feature.loc.strand == '-':
         promoter_seq = promoter_seq.reverse().complement()
@@ -168,13 +169,16 @@ def get_neighbor_features(features, index, neighbors):
     """ Find neighboring features for the feature at 'index'.
     If neighbors is 'x,y', return x upstream and y downstream genes.
     If neighbors is 'x:y', return all features within x upstream and y downstream nucleotides. """
+    
     center = features[index]
     if ',' in neighbors:
         up, down = map(int, neighbors.split(','))
         overlaps, upstream, downstream = [], [], []
+
         for f in features:
             if center.seqid != f.seqid or f == center:
                 continue
+
             # Check for overlap
             if not (f.loc.stop < center.loc.start or f.loc.start > center.loc.stop):
                 overlaps.append(f)
@@ -182,14 +186,17 @@ def get_neighbor_features(features, index, neighbors):
                 upstream.append(f)
             elif f.loc.start > center.loc.stop:
                 downstream.append(f)
+        
         # Filter overlaps
         overlaps_filtered = check_overlap(center, overlaps) if overlaps else []
         if overlaps and not overlaps_filtered:
             return []
         result = overlaps_filtered[:]
+
         # Sort and select closest upstream and downstream
         upstream = sorted(upstream, key=lambda x: -x.loc.stop)
         downstream = sorted(downstream, key=lambda x: x.loc.start)
+
         result.extend(upstream[:up])
         result.extend(downstream[:down])
         result.append(center)
@@ -264,9 +271,12 @@ def main():
     features = remove_overlapping_features(features)
 
     # Read genome annotation (GFF/GBK)
+    print(type(args.including_features))
+    print(args.including_features)
     gff_features = read_fts(args.gff_file).select(args.including_features)
     # Merge BLAST/infernal hits and annotation features
     merged = sorted(list(features) + list(gff_features), key=lambda x: x.loc.start)
+
     # Process neighborhoods and write output
     process_neighborhood(args, merged, seqs)
 
