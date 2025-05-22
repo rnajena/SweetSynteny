@@ -62,7 +62,6 @@ def process_hits(hit_file, input_type, gene_of_interest, args):
     params = params_map[input_type_key]
     features = params['reader']()
 
-    # Use thresholds from args
     if input_type_key == 'blast':
         features = features.select(evalue_lt=args.evalue_threshold_blast)
         features = features.select(len_gt=args.len_threshold_blast)
@@ -98,12 +97,32 @@ def generate_entry(feature, goi, counter):
         orientation,
         gene_biotype
     ]
-    return '\t'.join(fields) + '\n'
+    return '\t'.join(fields)
+
+
+def extract_and_save_promoter_regions(args, feature, seq, entry):
+    """ Extract promoter regions for the gene of interest and write them to a new mfna file. """
+    output_file = f"{args.output_path}.promoter.mfna"
+
+    promoter_entry = f'>{entry.split()[0]}\t{entry.split()[1]}\t{promoter_start}\t{feature.loc.start-1}\t{entry.split()[4]}\tpromoter'
+    header = f'>{promoter_entry.replace("\t", "_")}\n'
+
+    promoter_start = max(0, feature.loc.start - args.promoter_len)
+    promoter_seq = seq[promoter_start:feature.loc.start-1]
+    if feature.loc.strand == '-':
+        promoter_seq = promoter_seq.reverse().complement()
+
+    with open(f'{output_file}.mfna', 'a') as mfna_file:
+        mfna_file.write(header)
+        mfna_file.write(str(promoter_seq))
+
+    # Write annotation entry to TSV
+    with open(f'{args.output_path}.tsv', 'a') as tsv_file:
+        tsv_file.write(promoter_entry)
+
 
 def process_neighborhood(args, merged_features, seqs):
-    """
-    For each gene of interest, find its neighbors and write their data to output files.
-    """
+    """ For each gene of interest, find its neighbors and write their data to output files. """
     counter = 0 
     for idx, feature in enumerate(merged_features):
         if feature.type != args.gene_of_interest:
@@ -114,16 +133,16 @@ def process_neighborhood(args, merged_features, seqs):
                 # Generate TSV entry and write data for each neighbor
                 entry = generate_entry(neighbor, args.gene_of_interest, counter)
                 write_neighbour_data(
-                    neighbor, entry, args.output_path, seqs, args.input_type,
-                    args.promoter_len, args.promoter, args.gene_of_interest
+                    neighbor, entry, args.output_path, seqs, args.input_type, args.gene_of_interest
                 )
+                if args.promoter == 'yes':
+                    if neighbor.type == args.gene_of_interest:
+                        extract_and_save_promoter_regions(args, neighbor, seqs.d.get(neighbor.seqid), entry)
             counter += 1
 
 def check_overlap(center, overlaps):
-    """
-    Only keep overlaps if the overlap covers >50% of both the center and the neighbor,
-    or if they are on opposite strands.
-    """
+    """ Only keep overlaps if the overlap covers >50% of both the center and the neighbor,
+    or if they are on opposite strands. """
     new_list = []
     c_start, c_stop = center.loc.start, center.loc.stop
     c_length = c_stop - c_start + 1
@@ -145,51 +164,10 @@ def check_overlap(center, overlaps):
             new_list.append(gene)
     return new_list
 
-def extract_and_save_promoter_regions(args, merged_features, seqs):
-    """
-    Extract promoter regions for the gene of interest and write them to a new mfna file.
-    """
-    output_file = f"{args.output_path}.promoter.mfna"
-    count = 0
-    for feature in merged_features:
-        if feature.type != args.gene_of_interest:
-            continue
-
-        seqid = feature.seqid
-        try:
-            seq = seqs.d[seqid]  # Try dict-style access
-        except Exception:
-            # Fallback for sugar read object (list-style)
-            seq = None
-            for s in seqs:
-                if hasattr(s, "meta") and hasattr(s.meta, "_fasta") and getattr(s.meta._fasta, "header", None) == seqid:
-                    seq = s
-                    break
-            if seq is None:
-                continue
-
-        # Get promoter region coordinates
-        if feature.loc.strand == "+":
-            promoter_start = max(0, feature.loc.start - args.promoter_len)
-            promoter_seq = seq[promoter_start:feature.loc.start]
-        else:  # negative strand
-            promoter_start = feature.loc.stop
-            promoter_end = min(len(seq), feature.loc.stop + args.promoter_len)
-            promoter_seq = seq[promoter_start:promoter_end].reverse().complement()
-
-        # Write promoter sequence to file
-        header = f">{seqid}_promoter_{count} [{promoter_start+1}-{promoter_end}] ({'+' if feature.loc.strand == '+' else '-'})"
-        with open(output_file, "a") as out:
-            out.write(header + "\n")
-            out.write(str(promoter_seq) + "\n")
-        count += 1
-
 def get_neighbor_features(features, index, neighbors):
-    """
-    Find neighboring features for the feature at 'index'.
+    """ Find neighboring features for the feature at 'index'.
     If neighbors is 'x,y', return x upstream and y downstream genes.
-    If neighbors is 'x:y', return all features within x upstream and y downstream nucleotides.
-    """
+    If neighbors is 'x:y', return all features within x upstream and y downstream nucleotides. """
     center = features[index]
     if ',' in neighbors:
         up, down = map(int, neighbors.split(','))
@@ -228,9 +206,7 @@ def write_neighbour_data(
         feature, entry, output_path, seqs,
         input_type, gene_of_interest
     ):
-    """
-    Write the neighbor's sequence and annotation to the appropriate output files.
-    """
+    """ Write the neighbor's sequence and annotation to the appropriate output files. """
     # Try to get the sequence by dict or fallback to list
     seq = seqs.d.get(feature.seqid)
     if not seq:
@@ -250,12 +226,12 @@ def write_neighbour_data(
             seq_slice = seq_slice.reverse().complement()
 
     # Prepare header and determine biotype
-    header = f'>{entry.replace("\t", "_")}'
+    header = f'>{entry.replace("\t", "_")}\n'
     bio_type = entry.strip().split('\t')[-1]
 
     # Write annotation entry to TSV
     with open(f'{output_path}.tsv', 'a') as tsv_file:
-        tsv_file.write(entry)
+        tsv_file.write(entry+"\n")
 
     # Write sequence to correct output file(s)
     for file_type, (suffix, categories) in FILE_MODES.items():
@@ -267,9 +243,7 @@ def write_neighbour_data(
                 out_file.write(f'{content}\n')
 
 def get_tblastn_sequence(seq, feature):
-    """
-    Special handling for tBLASTn hits: extract the correct nucleotide region.
-    """
+    """ Special handling for tBLASTn hits: extract the correct nucleotide region. """
     qstart = (feature.meta._blast.qstart - 1) * 3 + 1
     qend = feature.meta._blast.qend * 3
     qlen = feature.meta._blast.qlen * 3
