@@ -5,7 +5,7 @@ from sugar import read_fts, read, Feature
 
 # Output file modes and feature categories
 FILE_MODES = {
-    'protein': ('.protein.mfaa', {'protein_coding', 'pseudogene', 'blast'}),
+    'protein': ('.protein.mfaa', {'protein_coding', 'pseudogene', 'tblastn', 'CDS'}),
     'srna': ('.srna.mfna', {'tRNA', 'infernal', 'ncRNA'})
 }
 
@@ -29,9 +29,9 @@ def setup_parser():
     parser.add_argument('--output_path', required=True, help='Base path for output files')
     parser.add_argument('--promoter', type=str, default='no', choices=['yes', 'no'], help='Include promoter region?')
     parser.add_argument('--promoter_len', type=int, default=100, help='Promoter region length (default: 100 nt)')
-    parser.add_argument('--including_features', type=list, default=['gene', 'pseudogene', 'ncRNA'], 
+    parser.add_argument('--including_features', nargs='+', default=['gene', 'pseudogene', 'ncRNA'], 
                         help='Include GFF features like genes, pseudogene, ncRNA. Maybe add CDS or tRNA.')
-    parser.add_argument('--evalue_threshold_blast', type=float, default=0.01, help='E-value threshold for BLAST hits')
+    parser.add_argument('--evalue_threshold_blast', type=float, default=1, help='E-value threshold for BLAST hits')
     parser.add_argument('--evalue_threshold_infernal', type=float, default=0.05, help='E-value threshold for Infernal hits')
     parser.add_argument('--len_threshold_blast', type=int, default=40, help='Length threshold for BLAST hits')
     parser.add_argument('--len_threshold_infernal', type=int, default=20, help='Length threshold for Infernal hits')
@@ -42,7 +42,7 @@ def process_hits(hit_file, input_type, gene_of_interest, args):
     """Read and filter hit file (BLAST/Infernal) for the gene of interest."""
     input_type_key = 'blast' if input_type in {'blastn', 'blastp', 'tblastn'} else 'infernal'
     blast_fmt = 'qseqid sseqid bitscore evalue pident length mismatch gapopen qstart qend qlen sstart send sstrand slen qseq sseq'
-    
+
     params_map = {
         'blast': {
             'fmt': blast_fmt,
@@ -70,6 +70,7 @@ def process_hits(hit_file, input_type, gene_of_interest, args):
         features = features.select(len_gt=args.len_threshold_infernal)
 
     features.data = sorted(features, key=params['sort_key'], reverse=True)
+
     return features
 
 def remove_overlapping_features(features):
@@ -81,13 +82,22 @@ def get_orientation(strand):
     """Return 'sense' or 'antisense' based on strand symbol."""
     return 'antisense' if strand == '-' else 'sense'
 
-def generate_entry(feature, goi, counter):
+def generate_entry(feature, goi, counter, input_type):
     """Create a TSV line for a feature, including seqid, name, coordinates, orientation, and biotype."""
+
     meta = getattr(feature.meta, f"_{feature.meta._fmt}", {})
     name = meta.get('Name', meta.get('ID', goi))
     start, stop = str(feature.loc.start), str(feature.loc.stop)
     orientation = get_orientation(feature.loc.strand)
-    gene_biotype = meta.get('gene_biotype', feature.meta._fmt)
+
+    if input_type == 'tblastn' and feature.meta._fmt == 'blast':
+        gene_biotype = 'tblastn'
+    else:
+        gene_biotype = (
+            getattr(meta, 'gene_biotype', None) or
+            getattr(feature, 'type', None) or
+            getattr(getattr(feature, 'meta', None), '_fmt', None)
+        )
 
     fields = [
         f'{feature.seqid}:{counter}',
@@ -128,11 +138,12 @@ def process_neighborhood(args, merged_features, seqs):
     for idx, feature in enumerate(merged_features):
         if feature.type != args.gene_of_interest:
             continue  # Only process features of interest
+
         neighbors = get_neighbor_features(merged_features, idx, args.neighbours)
         if neighbors:
             for neighbor in neighbors:
                 # Generate TSV entry and write data for each neighbor
-                entry = generate_entry(neighbor, args.gene_of_interest, counter)
+                entry = generate_entry(neighbor, args.gene_of_interest, counter, args.input_type)
                 write_neighbour_data(
                     neighbor, entry, args.output_path, seqs, args.input_type, args.gene_of_interest
                 )
@@ -170,11 +181,11 @@ def get_neighbor_features(features, index, neighbors):
     If neighbors is 'x,y', return x upstream and y downstream genes.
     If neighbors is 'x:y', return all features within x upstream and y downstream nucleotides. """
     
-    center = features[index]
+    center = features[index]   
+
     if ',' in neighbors:
         up, down = map(int, neighbors.split(','))
         overlaps, upstream, downstream = [], [], []
-
         for f in features:
             if center.seqid != f.seqid or f == center:
                 continue
@@ -186,16 +197,16 @@ def get_neighbor_features(features, index, neighbors):
                 upstream.append(f)
             elif f.loc.start > center.loc.stop:
                 downstream.append(f)
-        
+
         # Filter overlaps
         overlaps_filtered = check_overlap(center, overlaps) if overlaps else []
-        if overlaps and not overlaps_filtered:
-            return []
-        result = overlaps_filtered[:]
+        #if overlaps and not overlaps_filtered:
+        #    return []
+        result = overlaps_filtered[:]     
 
         # Sort and select closest upstream and downstream
         upstream = sorted(upstream, key=lambda x: -x.loc.stop)
-        downstream = sorted(downstream, key=lambda x: x.loc.start)
+        downstream = sorted(downstream, key=lambda x: x.loc.start)   
 
         result.extend(upstream[:up])
         result.extend(downstream[:down])
@@ -224,9 +235,11 @@ def write_neighbour_data(
         if not seq:
             raise KeyError(f"Sequence for {feature.seqid} not found.")
 
+    translate = True
     # Extract the correct sequence slice
-    if input_type == 'tblastn':
-        seq_slice = get_tblastn_sequence(seq, feature)
+    if input_type == 'tblastn' and feature.meta._fmt == 'blast':
+        seq_slice = feature.meta._blast.sseq.replace("_","")
+        translate = False
     else:
         seq_slice = seq[feature.loc.start:feature.loc.stop]
         if feature.loc.strand == '-':
@@ -242,22 +255,16 @@ def write_neighbour_data(
 
     # Write sequence to correct output file(s)
     for file_type, (suffix, categories) in FILE_MODES.items():
+
         if bio_type in categories:
             with open(f'{output_path}{suffix}', 'a') as out_file:
                 out_file.write(header)
-                # If protein, translate; else, write as is
-                content = seq_slice.translate(check_start=False) if file_type == 'protein' else seq_slice
+                if file_type == 'protein' and translate:
+                    # If protein, translate; else, write as is
+                    content = seq_slice.translate(check_start=False,complete=False)
+                else:
+                    content = seq_slice
                 out_file.write(f'{content}\n')
-
-def get_tblastn_sequence(seq, feature):
-    """ Special handling for tBLASTn hits: extract the correct nucleotide region. """
-    qstart = (feature.meta._blast.qstart - 1) * 3 + 1
-    qend = feature.meta._blast.qend * 3
-    qlen = feature.meta._blast.qlen * 3
-    start = max(0, feature.loc.start - qstart)
-    end = min(len(seq), feature.loc.stop + (qlen - qend))
-    sequence = seq[start:end]
-    return sequence.reverse().complement() if feature.loc.strand == '-' else sequence
 
 def main():
     parser = setup_parser()
@@ -268,10 +275,12 @@ def main():
     seqs = read(args.fna_file)
     # Read and filter hit file using user-specified thresholds
     features = process_hits(args.hit_file, args.input_type, args.gene_of_interest, args)
+    print(features)
     features = remove_overlapping_features(features)
-
+    print('overlap')
+    print(features)
     # Read genome annotation (GFF/GBK)
-    gff_features = read_fts(args.gff_file).select(args.including_features)
+    gff_features = read_fts(args.gff_file, fmt='gff').select(args.including_features)
     # Merge BLAST/infernal hits and annotation features
     merged = sorted(list(features) + list(gff_features), key=lambda x: x.loc.start)
 
