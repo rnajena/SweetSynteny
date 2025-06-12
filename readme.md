@@ -10,14 +10,15 @@ Key features of SweetSynteny:
     1. different number of organisms (from bacteria to eukaryotes)
     2. different searches (`cmsearch` for sRNA or `blast` for protein)
 - Sequence-driven clustering and color-pattern Microsynteny clustering
-    1. on sequence / structur level (-> see Table): `mmseq easy lineclust` [Done] or `cmscan` [Done]
-    2. on microsynteny level: `DBscan` [Done]
-    3. on global level: umap comparing microsynteny cluster [Done]
+    1. on sequence / structur level (-> see Table): `mmseq easy lineclust` or `cmscan`
+    2. on microsynteny level: `dendrogram`
+    3. on global level: umap comparing microsynteny cluster
 - Comprehensive results:
-    1. phylogenetic trees using `ete3` [TODO for github]
-    2. statistical summaries and umap
+    1. phylogenetic trees using `dendrogram` build by scipy.cluster.hierarchy
+    2. statistical summaries
     3. microsynteny plots
-    4. statistics on the similarity of the microsynteny locations
+    4. statistics on the similarity of the microsynteny locations, e.g. cosinus similarity
+    5. Optional: get gene of interest sequence and its promoter sequence (default: 100 nt upstream)
 
 | Conitig:Counter | Gene Name          | Start  | Stop   | Strand| Bio_type       | Color   |
 |-----------------|--------------------|--------|--------|-------|----------------|---------|
