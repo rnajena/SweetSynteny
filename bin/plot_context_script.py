@@ -1,20 +1,12 @@
+import os
 import argparse
 import pandas as pd
 import numpy as np
-from sklearn.cluster import DBSCAN
-from sklearn.preprocessing import StandardScaler
-from sklearn.decomposition import PCA
 import matplotlib.pyplot as plt
-from sugar import Feature, FeatureList
-import umap
-import os
-
-# Create legend handles
 from matplotlib.patches import Patch
-
-from scipy.cluster.hierarchy import linkage, dendrogram, fcluster
+from sugar import Feature, FeatureList
 from scipy.spatial.distance import pdist
-import matplotlib.pyplot as plt
+from scipy.cluster.hierarchy import linkage, dendrogram, fcluster
 
 def setup_parser_func():
     """Set up and return the argument parser."""
@@ -70,7 +62,7 @@ def prepare_dataframe_func(input_file, genome_name_tsv=""):
     
     return df
 
-def cluster_genomes_func(df, output_path, output_ending, cut_height_args=0.5, cluster=2, threshold=0.3):
+def cluster_genomes_func(df, output_path, output_ending, cut_height=0.5, cluster=2, threshold=0.3):
     """Cluster genomes based on feature matrix."""
 
     unique_colors = df['cluster_color'].unique()
@@ -84,24 +76,38 @@ def cluster_genomes_func(df, output_path, output_ending, cut_height_args=0.5, cl
 
     # Compute pairwise Jaccard distances
     distance_matrix = pdist(X, metric='jaccard')
-    #distance_matrix = squareform(jaccard_dist)
 
     # Perform hierarchical clustering
-    Z = linkage(distance_matrix, method='ward')
-    
+    Z = linkage(distance_matrix, method='ward')    
+    complete_clustering = linkage(distance_matrix, method="complete")
+    average_clustering = linkage(distance_matrix, method="average")
+    single_clustering = linkage(distance_matrix, method="single")
+
+    dendrogram(complete_clustering)
+    plt.tight_layout()
+    plt.savefig(f"{output_path}.Tree.complete_clustering.{output_ending}")
+    plt.close()
+    dendrogram(average_clustering)
+    plt.tight_layout()
+    plt.savefig(f"{output_path}.Tree.average_clustering.{output_ending}")
+    plt.close()    
+    dendrogram(single_clustering)
+    plt.tight_layout()
+    plt.savefig(f"{output_path}.Tree.single_clustering.{output_ending}")
+    plt.close()
+
     # Create a mapping from genome to organism_name and Get the organism names in the same order as feature_matrix_color.index
     genome_to_organism = df.set_index("genome")["organism_name"].to_dict()
     dendro_labels = [genome_to_organism.get(genome, genome) for genome in feature_matrix_color.index]
     
     # Plot dendrogram with a horizontal line at your chosen height
     plt.figure(figsize=(10, 6), dpi=750)
-    dendrogram(Z, labels=dendro_labels, leaf_rotation=90)
+    dendrogram(Z, color_threshold=cut_height, labels=dendro_labels, leaf_rotation=90)
     plt.title('Clustering Dendrogram')
     plt.xlabel('Genomes')
     plt.ylabel('Jaccard Distance')
 
     # Choose a height (distance) to cut the tree
-    cut_height = cut_height_args  # Adjust this value based on your dendrogram
     plt.axhline(y=cut_height, color='r', linestyle='--', label=f'Cut at {cut_height}')
     plt.legend()
     plt.tight_layout()
@@ -118,48 +124,8 @@ def cluster_genomes_func(df, output_path, output_ending, cut_height_args=0.5, cl
             cluster_labels[genome] = -1
         if feature_matrix_color.loc[genome].sum() == 0:
             cluster_labels[genome] = -2
-            
-    reducer = umap.UMAP(random_state=42)
-    embedding = reducer.fit_transform(feature_matrix_color.values)
-
-    # Plot, coloring by cluster labels
-    plt.scatter(embedding[:, 0], embedding[:, 1], c=cluster_labels, cmap='tab10')
-    plt.title('UMAP projection of Genomes')
-    plt.xlabel('UMAP-1')
-    plt.ylabel('UMAP-2')
-    plt.tight_layout()  
-    plt.savefig(f"{output_path}.UMAP.{output_ending}")
-    plt.close()  
-
+    
     return cluster_labels.values, feature_matrix_color
-    # from logisticpca import LogisticPCA
-
-def plot_umap(feature_matrix_color, labels, output_path, output_ending):
-    # Assuming feature_matrix from your clustering function
-    reducer = umap.UMAP(
-        n_neighbors=15,        # Balance local/global structure
-        min_dist=0.1,          # Controls cluster tightness
-        random_state=42,       # Reproducibility
-        metric='cosine'       # Optimal for binary presence/absence data
-    )
-
-    embedding = reducer.fit_transform(feature_matrix_color)
-
-    # Create scatter plot with labels
-    scatter = plt.scatter(
-        embedding[:, 0], embedding[:, 1],
-        c=labels, cmap='Spectral', label=labels
-    )
-
-    # Create a  legend for unique labels
-    handles, unique_labels = scatter.legend_elements(prop="colors")
-
-    plt.legend(handles, np.unique(labels), title="Cluster")
-    plt.title('Microsynteny Clusters in UMAP Space')
-    plt.xlabel('UMAP1')
-    plt.ylabel('UMAP2')
-    plt.savefig(f"{output_path}_UMAP.{output_ending}")
-    plt.close()
 
 def plot_cluster_func(cluster_df, output_path, output_ending, scale, gene_of_interest, gene_lable, max_subplots=20):
     """Generate plots for a cluster."""
@@ -270,8 +236,6 @@ def main():
 
         labels, feature_matrix_color = cluster_genomes_func(df, args.output_path, args.output_ending, args.cut_height_args, args.cluster, args.threshold)
         
-        #plot_umap(feature_matrix_color, labels, args.output_path, args.output_ending)
-
         # correlation of cluster labels to each genome
         genome_to_cluster = pd.Series(labels, index=feature_matrix_color.index).groupby(level=0).first()
 
