@@ -6,7 +6,7 @@ from sugar import read_fts, read, Feature
 # Output file modes and feature categories
 FILE_MODES = {
     'protein': ('.protein.mfaa', {'protein_coding', 'pseudogene', 'tblastn', 'CDS'}),
-    'srna': ('.srna.mfna', {'tRNA', 'infernal', 'ncRNA'})
+    'srna': ('.srna.mfna', {'tRNA', 'infernal', 'ncRNA', 'infernal'})
 }
 
 def validate_neighbors(neighbors):
@@ -17,9 +17,9 @@ def validate_neighbors(neighbors):
 def setup_parser():
     """Configure command-line argument parser."""
     parser = argparse.ArgumentParser(description='Process genomic features and extract neighbors')
-    parser.add_argument('--hit_file', required=True, help='Path to hit file (blast/infernal)')
-    parser.add_argument('--input_type', required=True, 
-                        choices=['blastn', 'blastp', 'infernal', 'tblastn'],
+    parser.add_argument('--hit_file', help='Path to hit file (blast/infernal)')
+    parser.add_argument('--input_type', required=True,
+                        choices=['blastn', 'blastp', 'infernal', 'tblastn', 'from_gff'],
                         help='Input file type')
     parser.add_argument('--gff_file', required=True, help='Path to GFF or GBK file')
     parser.add_argument('--fna_file', required=True, help='Path to FNA file')
@@ -92,6 +92,8 @@ def generate_entry(feature, goi, counter, input_type):
 
     if input_type == 'tblastn' and feature.meta._fmt == 'blast':
         gene_biotype = 'tblastn'
+    elif input_type == 'infernal' and feature.meta._fmt == 'infernal':
+        gene_biotype = 'infernal'
     else:
         gene_biotype = (
             getattr(meta, 'gene_biotype', None) or
@@ -109,35 +111,18 @@ def generate_entry(feature, goi, counter, input_type):
     ]
     return '\t'.join(fields)
 
-
-def extract_and_save_promoter_regions(args, feature, seq, entry):
-    """ Extract promoter regions for the gene of interest and write them to a new mfna file. """
-    output_file = f"{args.output_path}.promoter.mfna"
-
-    promoter_start = max(0, feature.loc.start - args.promoter_len)
-
-    promoter_entry = f'{entry.split()[0]}\t{entry.split()[1]}\t{promoter_start}\t{feature.loc.start-1}\t{entry.split()[4]}\tpromoter\n'
-    header = f'>{promoter_entry.replace("\t", "_")}'
-
-    promoter_seq = seq[promoter_start:feature.loc.start-1]
-    if feature.loc.strand == '-':
-        promoter_seq = promoter_seq.reverse().complement()
-
-    with open(f'{output_file}', 'a') as mfna_file:
-        mfna_file.write(header)
-        mfna_file.write(str(promoter_seq) + '\n')
-
-    # Write annotation entry to TSV
-    with open(f'{args.output_path}.tsv', 'a') as tsv_file:
-        tsv_file.write(promoter_entry)
-
-
 def process_neighborhood(args, merged_features, seqs):
     """ For each gene of interest, find its neighbors and write their data to output files. """
     counter = 0 
     for idx, feature in enumerate(merged_features):
-        if feature.type != args.gene_of_interest:
-            continue  # Only process features of interest
+
+        if args.input_type == 'from_gff':
+            if feature.meta._gff.ID != args.gene_of_interest:
+                continue
+        
+        if args.input_type in ['blastn', 'blastp', 'infernal', 'tblastn']:
+            if feature.type != args.gene_of_interest:
+                continue  # Only process features of interest
 
         neighbors = get_neighbor_features(merged_features, idx, args.neighbours)
         if neighbors:
@@ -147,9 +132,17 @@ def process_neighborhood(args, merged_features, seqs):
                 write_neighbour_data(
                     neighbor, entry, args.output_path, seqs, args.input_type, args.gene_of_interest
                 )
-                if args.promoter == 'yes':
-                    if neighbor.type == args.gene_of_interest:
-                        extract_and_save_promoter_regions(args, neighbor, seqs.d.get(neighbor.seqid), entry)
+
+            if args.promoter == 'yes':
+
+                if args.input_type in ['blastn', 'blastp', 'infernal', 'tblastn']:
+                    if feature.type == args.gene_of_interest:
+                        extract_and_save_promoter_regions(args, feature, seqs.d.get(feature.seqid), entry)
+
+                if args.input_type == 'from_gff':
+                    if feature.meta._gff.ID == args.gene_of_interest:
+                        extract_and_save_promoter_regions(args, feature, seqs.d.get(feature.seqid), entry)
+                
             counter += 1
 
 def check_overlap(center, overlaps):
@@ -255,8 +248,8 @@ def write_neighbour_data(
 
     # Write sequence to correct output file(s)
     for file_type, (suffix, categories) in FILE_MODES.items():
-
         if bio_type in categories:
+
             with open(f'{output_path}{suffix}', 'a') as out_file:
                 out_file.write(header)
                 if file_type == 'protein' and translate:
@@ -266,26 +259,44 @@ def write_neighbour_data(
                     content = seq_slice
                 out_file.write(f'{content}\n')
 
+def extract_and_save_promoter_regions(args, feature, seq, entry):
+    """ Extract promoter regions for the gene of interest and write them to a new mfna file. """
+    output_file = f"{args.output_path}.promoter.mfna"
+
+    promoter_start = max(0, feature.loc.start - args.promoter_len)
+
+    promoter_entry = f'{entry.split()[0]}\t{entry.split()[1]}\t{promoter_start}\t{feature.loc.start-1}\t{entry.split()[4]}\tpromoter\n'
+    header = f'>{promoter_entry.replace("\t", "_")}'
+
+    promoter_seq = seq[promoter_start:feature.loc.start-1]
+    if feature.loc.strand == '-':
+        promoter_seq = promoter_seq.reverse().complement()
+
+    with open(f'{output_file}', 'a') as mfna_file:
+        mfna_file.write(header)
+        mfna_file.write(str(promoter_seq) + '\n')
+
 def main():
     parser = setup_parser()
     args = parser.parse_args()
     validate_neighbors(args.neighbours)
 
-    # Read genome sequence
-    seqs = read(args.fna_file)
-    # Read and filter hit file using user-specified thresholds
-    features = process_hits(args.hit_file, args.input_type, args.gene_of_interest, args)
-    print(features)
-    features = remove_overlapping_features(features)
-    print('overlap')
-    print(features)
     # Read genome annotation (GFF/GBK)
     gff_features = read_fts(args.gff_file, fmt='gff').select(args.including_features)
-    # Merge BLAST/infernal hits and annotation features
-    merged = sorted(list(features) + list(gff_features), key=lambda x: x.loc.start)
 
-    # Process neighborhoods and write output
-    process_neighborhood(args, merged, seqs)
+    # Read genome sequence
+    seqs = read(args.fna_file)
+
+    if args.input_type in ['blastn', 'blastp', 'infernal', 'tblastn']:
+        # Read and filter hit file using user-specified thresholds
+        # Merge BLAST/infernal hits and annotation features
+        features_of_gene_of_interest = process_hits(args.hit_file, args.input_type, args.gene_of_interest, args)
+        features_of_gene_of_interest = remove_overlapping_features(features_of_gene_of_interest)
+        merged = sorted(list(features_of_gene_of_interest) + list(gff_features), key=lambda x: x.loc.start)
+        process_neighborhood(args, merged, seqs)
+
+    elif args.input_type == 'from_gff':
+        process_neighborhood(args, gff_features, seqs)
 
 if __name__ == '__main__':
     main()
