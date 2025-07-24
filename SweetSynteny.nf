@@ -26,7 +26,6 @@ log.info """
      Gene of interest : ${params.gene_of_interest} [Target gene identifie]
      Neighbours : ${params.neighbours} [Neighbor range: x,y (genes) or x:y (nucleotides)]
     >Parameter for Plotting
-     Clustering level : ${params.cluster_level} [sequence_level or in futur seconday_level]
      Scale : ${params.scale}
      Plotting ending : ${params.plotting} [.png or .svg]
      Cluster : ${params.cluster} [Minimal size for a cluster, default 2]
@@ -47,7 +46,9 @@ process runSearch {
     script:
     if (params.types == 'blastn')
         """
-        makeblastdb -in $genome -dbtype nucl
+        if [ ! -e "${genome}.nin" ] && [ ! -e "${genome}.00.nin" ]; then
+                makeblastdb -in $genome -dbtype nucl
+        fi
         blastn \\
             -num_threads $task.cpus \\
             -query ${params.query} \\
@@ -58,7 +59,9 @@ process runSearch {
         """
     else if (params.types == 'blastp')
         """
-        #makeblastdb -in $genome -dbtype nucl
+        if [ ! -e "${genome}.nin" ] && [ ! -e "${genome}.00.nin" ]; then
+                makeblastdb -in $genome -dbtype nucl
+        fi
         blastp \\
             -num_threads $task.cpus \\
             -query ${params.query} \\
@@ -69,7 +72,9 @@ process runSearch {
         """
     else if (params.types == 'tblastn')
         """
-        makeblastdb -in $genome -dbtype nucl
+        if [ ! -e "${genome}.nin" ] && [ ! -e "${genome}.00.nin" ]; then
+                makeblastdb -in $genome -dbtype nucl
+        fi
         tblastn \\
             -num_threads $task.cpus \\
             -query ${params.query} \\
@@ -150,7 +155,7 @@ process clusterColoring {
 
     # Merge results
     ############################################ wird nicht erstellt
-    cat $tsv_files > merged_neighbours.tsv
+    cat $tsv_files | grep -v 'promoter' > merged_neighbours.tsv
 
     # Cluster proteins
     cat $mfaa_files > merged_neighbours.protein.mfaa
@@ -171,42 +176,19 @@ process clusterColoring {
     # Check if file is not empty
     if [ ! -s "merged_neighbours.srna.mfna" ]; then
         cat $mfna_files > merged_neighbours.srna.mfna
-
-        if [ "${params.cluster_level}" == "sequence_level" ]; then
-            mmseqs createdb \\
-                --dbtype 2 \\
-                merged_neighbours.srna.mfna \\
-                merged_db.srna
-
-            mkdir tmp.srna
             
-            mmseqs easy-linclust \\
-                merged_neighbours.srna.mfna \\
-                clusterRes.srna tmp.srna \\
-                --min-seq-id 0.5 \\
-                -c 0.8 \\
-                --cov-mode 0 \\
-                --cluster-mode 2 -k 6 
-
-        elif [ "${params.cluster_level}" == "secondary_level" ]; then
-            cmscan -E 0.01 --cpu 10 --noali --tblout clusterRes.srna Rfam.cm merged_neighbours.srna.mfna
-            # TODO check overwriting
-            python ${projectDir}/bin/postprocess_cmscan.py \
-                --cmscan_file clusterRes.srna \
-                --output_file clusterRes_cluster.tsv
-
-        else
-            echo "Invalid clustering type: ${params.cluster_level}" >&2
-            exit 1
-        fi
+        cmscan -E 0.01 --cpu 10 --noali --tblout clusterRes.srna Rfam.cm merged_neighbours.srna.mfna
+        # TODO check overwriting
+        python ${projectDir}/bin/postprocess_cmscan.py \
+            --cmscan_file clusterRes.srna \
+            --output_file clusterRes_cluster.tsv
 
         cat *_cluster.tsv > clusterRes_cluster.tsv
 
     else:
         cp -i _cluster.tsv clusterRes_cluster.tsv
 
-    fi
-    
+    fi    
     
     python ${projectDir}/bin/color_clusters_script.py \\
         --cluster_file clusterRes_cluster.tsv \\
@@ -242,11 +224,13 @@ workflow {
     genome_gff_pairs = Channel
         .fromPath("${params.genomes_dir}/*", type: 'dir')
         .map { subfolder -> 
-            def fna = subfolder.listFiles().find { it.name.endsWith('.fasta') }
+            def fna = subfolder.listFiles().find { it.name.endsWith('.fna') }
             def gff = subfolder.listFiles().find { it.name.endsWith("${params.annotation_type}") }
             tuple(subfolder.name, fna, gff)
         }
         .filter { it[1] != null && it[2] != null }
+
+
     // Run search process
     search_results = runSearch(genome_gff_pairs)
     // Filter out empty results
