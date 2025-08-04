@@ -21,7 +21,7 @@ def setup_parser():
     parser.add_argument('--input_type', required=True,
                         choices=['blastn', 'blastp', 'infernal', 'tblastn', 'from_gff'],
                         help='Input file type')
-    parser.add_argument('--gff_file', required=True, help='Path to GFF or GBK file')
+    parser.add_argument('--gff_file', required=True, help='Path to GFF')
     parser.add_argument('--fna_file', required=True, help='Path to FNA file')
     parser.add_argument('--gene_of_interest', required=True, help='Target gene identifier')
     parser.add_argument('--neighbours', type=str, required=True, default='2:2',
@@ -35,6 +35,7 @@ def setup_parser():
     parser.add_argument('--evalue_threshold_infernal', type=float, default=0.05, help='E-value threshold for Infernal hits')
     parser.add_argument('--len_threshold_blast', type=int, default=40, help='Length threshold for BLAST hits')
     parser.add_argument('--len_threshold_infernal', type=int, default=20, help='Length threshold for Infernal hits')
+    parser.add_argument('--from_gff_feature', type=str, default="ID", help='Select which feature show match the string. Default: ID, could also be e.g. product or name')
 
     return parser
 
@@ -86,7 +87,7 @@ def generate_entry(feature, goi, counter, input_type):
     """Create a TSV line for a feature, including seqid, name, coordinates, orientation, and biotype."""
 
     meta = getattr(feature.meta, f"_{feature.meta._fmt}", {})
-    name = meta.get('Name', meta.get('ID', goi))
+    name = meta.get('Name', meta.get('ID', goi)) #fromaly ID
     start, stop = str(feature.loc.start), str(feature.loc.stop)
     orientation = get_orientation(feature.loc.strand)
 
@@ -114,64 +115,83 @@ def generate_entry(feature, goi, counter, input_type):
 def process_neighborhood(args, merged_features, seqs):
     """ For each gene of interest, find its neighbors and write their data to output files. """
     counter = 0 
+
+    # Use a flag to track if the current feature is a gene of interest
+    is_gene_of_interest = False
     for idx, feature in enumerate(merged_features):
 
         if args.input_type == 'from_gff':
-            if feature.meta._gff.ID != args.gene_of_interest:
-                continue
-        
-        if args.input_type in ['blastn', 'blastp', 'infernal', 'tblastn']:
-            if feature.type != args.gene_of_interest:
-                continue  # Only process features of interest
+            if args.from_gff_feature == "ID":
+                if feature.meta._gff.ID == args.gene_of_interest:
+                    is_gene_of_interest = True
+            elif args.from_gff_feature == "product":
+                try:
+                    # Use a more specific exception for missing attributes
+                    if args.gene_of_interest in feature.meta._gff.product:
+                        is_gene_of_interest = True
+                except AttributeError:
+                    # Pass silently for features like pseudogenes that lack a 'product'
+                    pass
+            else:  # input_type is one of the blast/infernal types
+                if feature.type == args.gene_of_interest:
+                    is_gene_of_interest = True
 
-        neighbors = get_neighbor_features(merged_features, idx, args.neighbours)
-        if neighbors:
-            for neighbor in neighbors:
+        # If it's a gene of interest, process its neighbors
+        if is_gene_of_interest:
+            neighbors = get_neighbor_features(merged_features, idx, args.neighbours)
+
+            if neighbors:
                 # Generate TSV entry and write data for each neighbor
-                entry = generate_entry(neighbor, args.gene_of_interest, counter, args.input_type)
-                write_neighbour_data(
-                    neighbor, entry, args.output_path, seqs, args.input_type, args.gene_of_interest
-                )
+                for neighbor in neighbors:
+                    entry = generate_entry(neighbor, args.gene_of_interest, counter, args.input_type)
+                    write_neighbour_data(
+                        neighbor, entry, args.output_path, seqs, args.input_type, args.gene_of_interest
+                    )
 
+            # Extract and save promoter regions if requested 
             if args.promoter == 'yes':
-
-                if args.input_type in ['blastn', 'blastp', 'infernal', 'tblastn']:
-                    if feature.type == args.gene_of_interest:
-                        extract_and_save_promoter_regions(args, feature, seqs.d.get(feature.seqid), entry)
-
-                if args.input_type == 'from_gff':
-                    if feature.meta._gff.ID == args.gene_of_interest:
-                        extract_and_save_promoter_regions(args, feature, seqs.d.get(feature.seqid), entry)
+                entry = generate_entry(feature, args.gene_of_interest, counter, args.input_type)
                 
+                # Check for the sequence in the dictionary before passing it
+                seq = seqs.d.get(feature.seqid)
+                if seq:
+                    extract_and_save_promoter_regions(args, feature, seq, entry)
+
+            # Reset the flag and increment the counter for the next iteration
+            is_gene_of_interest = False
             counter += 1
 
 def check_overlap(center, overlaps):
-    """ Only keep overlaps if the overlap covers >50% of both the center and the neighbor,
-    or if they are on opposite strands. """
+    """ Only keep overlaps if the overlap covers >50% of both the center and the neighbor, or if they are on opposite strands. """
     new_list = []
     c_start, c_stop = center.loc.start, center.loc.stop
     c_length = c_stop - c_start + 1
 
     for gene in overlaps:
+
         g_start, g_end = gene.loc.start, gene.loc.stop
         g_length = g_end - g_start + 1
         overlap_start = max(c_start, g_start)
         overlap_stop = min(c_stop, g_end)
+        
         if overlap_start > overlap_stop:
             continue  # No overlap
+        
         overlap_length = overlap_stop - overlap_start + 1
         center_percent = overlap_length / c_length
         gene_percent = overlap_length / g_length
+        
         # Keep if >50% overlap or on opposite strands
         if center_percent > 0.5 and gene_percent > 0.5:
             new_list.append(gene)
+        
         elif gene.loc.strand != center.loc.strand:
             new_list.append(gene)
+    
     return new_list
 
 def get_neighbor_features(features, index, neighbors):
-    """ Find neighboring features for the feature at 'index'.
-    If neighbors is 'x,y', return x upstream and y downstream genes.
+    """ Find neighboring features for the feature at 'index'. If neighbors is 'x,y', return x upstream and y downstream genes.
     If neighbors is 'x:y', return all features within x upstream and y downstream nucleotides. """
     
     center = features[index]   
@@ -259,6 +279,7 @@ def write_neighbour_data(
                     content = seq_slice
                 out_file.write(f'{content}\n')
 
+
 def extract_and_save_promoter_regions(args, feature, seq, entry):
     """ Extract promoter regions for the gene of interest and write them to a new mfna file. """
     output_file = f"{args.output_path}.promoter.mfna"
@@ -280,7 +301,7 @@ def main():
     parser = setup_parser()
     args = parser.parse_args()
     validate_neighbors(args.neighbours)
-
+    
     # Read genome annotation (GFF/GBK)
     gff_features = read_fts(args.gff_file, fmt='gff').select(args.including_features)
 
