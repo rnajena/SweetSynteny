@@ -10,6 +10,7 @@ def setup_parser():
     parser.add_argument('--cluster_file', required=True, help='MMseqs2 cluster TSV file')
     parser.add_argument('--tsv_file', required=True, help='Input features TSV file')
     parser.add_argument('--output_file', required=True, help='Path for colored output file')
+    parser.add_argument('--size_for_cluster', type=int, default=2, help='Defines at which cluster size, a cluster gets a color.')
     return parser
 
 def generate_distinct_colors(num_colors):
@@ -24,7 +25,7 @@ def generate_distinct_colors(num_colors):
             int(rgb[0]*255), int(rgb[1]*255), int(rgb[2]*255)))
     return colors
 
-def process_clusters(cluster_file):
+def process_clusters(cluster_file, size_for_cluster):
     """Process cluster file and create color mappings."""
     cluster_map = {}
     with open(cluster_file, 'r') as f:
@@ -32,8 +33,8 @@ def process_clusters(cluster_file):
         for cluster_id, member_id in reader:
             cluster_map.setdefault(cluster_id, []).append(member_id)
 
-    # Filter singleton clusters and create color mapping # TODO make it to a parameter
-    filtered_clusters = {k: v for k, v in cluster_map.items() if len(v) > 1}
+    # Filter clusters based on the size_for_cluster parameter
+    filtered_clusters = {k: v for k, v in cluster_map.items() if len(v) >= size_for_cluster}
     colors = generate_distinct_colors(len(filtered_clusters))
 
     # Create direct member-color mapping
@@ -57,7 +58,7 @@ def main():
     validate_files(args.cluster_file, args.tsv_file)
     
     # Process cluster data and give clusters >2 a color
-    color_map = process_clusters(args.cluster_file)
+    color_map = process_clusters(args.cluster_file, args.size_for_cluster)
 
     # Process neigbours and gene_of_interest data
     df = pd.read_csv(args.tsv_file, sep='\t', header=None,
