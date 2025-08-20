@@ -83,17 +83,41 @@ def get_orientation(strand):
     """Return 'sense' or 'antisense' based on strand symbol."""
     return 'antisense' if strand == '-' else 'sense'
 
-def generate_entry(feature, goi, counter, input_type):
+def generate_entry(feature, counter, args):
     """Create a TSV line for a feature, including seqid, name, coordinates, orientation, and biotype."""
 
     meta = getattr(feature.meta, f"_{feature.meta._fmt}", {})
-    name = meta.get('Name', meta.get('ID', goi)) #fromaly ID
+
+    if args.input_type == "from_gff" and args.from_gff_feature == "product":
+        try:
+            if args.gene_of_interest in meta.product:
+                name = args.gene_of_interest.replace(" ","-")
+            else:
+                for attr in ("product", "Name", "ID", "qseqid"):
+                    try:
+                        name = getattr(meta, attr)
+                        break
+                    except AttributeError:
+                        continue
+        except AttributeError:
+            name = meta.ID
+
+    else:
+        for attr in ("query", "Name", "ID", "qseqid"):
+            try:
+                name = getattr(meta, attr)
+                break
+            except AttributeError:
+                continue
+        else:
+            name = ""
+
     start, stop = str(feature.loc.start), str(feature.loc.stop)
     orientation = get_orientation(feature.loc.strand)
 
-    if input_type == 'tblastn' and feature.meta._fmt == 'blast':
+    if args.input_type == 'tblastn' and feature.meta._fmt == 'blast':
         gene_biotype = 'tblastn'
-    elif input_type == 'infernal' and feature.meta._fmt == 'infernal':
+    elif args.input_type == 'infernal' and feature.meta._fmt == 'infernal':
         gene_biotype = 'infernal'
     else:
         gene_biotype = (
@@ -110,6 +134,7 @@ def generate_entry(feature, goi, counter, input_type):
         orientation,
         gene_biotype
     ]
+
     return '\t'.join(fields)
 
 def process_neighborhood(args, merged_features, seqs):
@@ -119,7 +144,6 @@ def process_neighborhood(args, merged_features, seqs):
     # Use a flag to track if the current feature is a gene of interest
     is_gene_of_interest = False
     for idx, feature in enumerate(merged_features):
-
         if args.input_type == 'from_gff':
             if args.from_gff_feature == "ID":
                 if feature.meta._gff.ID == args.gene_of_interest:
@@ -132,26 +156,25 @@ def process_neighborhood(args, merged_features, seqs):
                 except AttributeError:
                     # Pass silently for features like pseudogenes that lack a 'product'
                     pass
-            else:  # input_type is one of the blast/infernal types
-                if feature.type == args.gene_of_interest:
-                    is_gene_of_interest = True
+        else: # blast and infernal
+            if args.input_type.replace("tblastn","blast") == feature.meta._fmt:
+                is_gene_of_interest = True
 
-        # If it's a gene of interest, process its neighbors
+        # ---- If it's a gene of interest, process its neighbors ----
         if is_gene_of_interest:
             neighbors = get_neighbor_features(merged_features, idx, args.neighbours)
 
             if neighbors:
                 # Generate TSV entry and write data for each neighbor
                 for neighbor in neighbors:
-                    entry = generate_entry(neighbor, args.gene_of_interest, counter, args.input_type)
+                    entry = generate_entry(neighbor, counter, args)
                     write_neighbour_data(
                         neighbor, entry, args.output_path, seqs, args.input_type, args.gene_of_interest
                     )
 
-            # Extract and save promoter regions if requested 
+            # ---- Extract and save promoter regions if requested ----
             if args.promoter == 'yes':
-                entry = generate_entry(feature, args.gene_of_interest, counter, args.input_type)
-                
+                entry = generate_entry(feature, counter, args)
                 # Check for the sequence in the dictionary before passing it
                 seq = seqs.d.get(feature.seqid)
                 if seq:
@@ -226,6 +249,7 @@ def get_neighbor_features(features, index, neighbors):
         result.append(center)
         # Return all neighbors sorted by start position
         return sorted(result, key=lambda x: x.loc.start)
+
     else:
         # Nucleotide-based neighborhood
         up, down = map(int, neighbors.split(':'))
@@ -251,7 +275,7 @@ def write_neighbour_data(
     translate = True
     # Extract the correct sequence slice
     if input_type == 'tblastn' and feature.meta._fmt == 'blast':
-        seq_slice = feature.meta._blast.sseq.replace("_","")
+        seq_slice = feature.meta._blast.sseq.replace("_","").replace("-","")
         translate = False
     else:
         seq_slice = seq[feature.loc.start:feature.loc.stop]
@@ -304,15 +328,15 @@ def main():
     
     # Read genome annotation (GFF/GBK)
     gff_features = read_fts(args.gff_file, fmt='gff').select(args.including_features)
-
     # Read genome sequence
     seqs = read(args.fna_file)
 
     if args.input_type in ['blastn', 'blastp', 'infernal', 'tblastn']:
         # Read and filter hit file using user-specified thresholds
-        # Merge BLAST/infernal hits and annotation features
         features_of_gene_of_interest = process_hits(args.hit_file, args.input_type, args.gene_of_interest, args)
         features_of_gene_of_interest = remove_overlapping_features(features_of_gene_of_interest)
+        
+        # Merge BLAST/infernal hits and annotation features
         merged = sorted(list(features_of_gene_of_interest) + list(gff_features), key=lambda x: x.loc.start)
         process_neighborhood(args, merged, seqs)
 
