@@ -1,12 +1,32 @@
 import csv
 import os
 import argparse
+from pathlib import Path
 from sugar import read_fts, read, Feature
 
 # Output file modes and feature categories
-FILE_MODES = {
-    'protein': ('.protein.mfaa', {'protein_coding', 'pseudogene', 'tblastn', 'CDS'}),
-    'srna': ('.srna.mfna', {'tRNA', 'infernal', 'ncRNA', 'infernal'})
+#FILE_MODES = {
+#    'protein': ('.protein.mfaa', {'protein_coding', 'pseudogene', 'tblastn', 'CDS'}),
+#    'srna': ('.srna.mfna', {'tRNA', 'infernal', 'ncRNA'})
+#}
+
+OUTPUT_FILES = {
+    'protein': ('.protein.mfaa', True),
+    'srna': ('.srna.mfna', False),
+}
+
+FEATURE_TO_OUTPUT_TYPE = {
+    # 'protein'
+    'protein_coding': 'protein',
+    'pseudogene': 'protein',
+    'tblastn': 'protein',
+    'CDS': 'protein',
+    # 'srna' 
+    'tRNA': 'srna',
+    'rRNA': 'srna',
+    'ncRNA': 'srna',
+    'infernal': 'srna',
+    'misc_RNA': 'srna',
 }
 
 def validate_neighbors(neighbors):
@@ -17,22 +37,22 @@ def validate_neighbors(neighbors):
 def setup_parser():
     """Configure command-line argument parser."""
     parser = argparse.ArgumentParser(description='Process genomic features and extract neighbors')
-    parser.add_argument('--hit_file', help='Path to hit file (blast/infernal)')
+    parser.add_argument('--hit_file', help='Path to hit file (blast/infernal). Required if input_type is not "from_gff"')
     parser.add_argument('--input_type', required=True,
                         choices=['blastn', 'blastp', 'infernal', 'tblastn', 'from_gff'],
                         help='Input file type')
-    parser.add_argument('--gff_file', required=True, help='Path to GFF')
-    parser.add_argument('--fna_file', required=True, help='Path to FNA file')
-    parser.add_argument('--gene_of_interest', required=True, help='Target gene identifier')
-    parser.add_argument('--neighbours', type=str, required=True, default='2:2',
-                        help='Neighbor range: x,y (genes) or x:y (nucleotides)')
-    parser.add_argument('--output_path', required=True, help='Base path for output files')
+    parser.add_argument('--gff_file', required=True, help='Path to GFF/GBK file')
+    parser.add_argument('--fna_file', required=True, help='Path to FNA sequence file')
+    parser.add_argument('--gene_of_interest', required=True, help='Target gene identifier (e.g., ID, product name or query ID)')
+    parser.add_argument('--neighbours', type=str, default='2:2',
+                        help='Neighbor range: x,y (genes) or x:y (nucleotides). Default: 2:2')
+    parser.add_argument('--output_path', required=True, help='Base path for output files (e.g., /path/to/results/my_run)')
     parser.add_argument('--promoter', type=str, default='no', choices=['yes', 'no'], help='Include promoter region?')
     parser.add_argument('--promoter_len', type=int, default=100, help='Promoter region length (default: 100 nt)')
     parser.add_argument('--including_features', nargs='+', default=['gene', 'pseudogene', 'ncRNA'], 
                         help='Include GFF features like genes, pseudogene, ncRNA. Maybe add CDS or tRNA.')
     parser.add_argument('--evalue_threshold_blast', type=float, default=1, help='E-value threshold for BLAST hits')
-    parser.add_argument('--evalue_threshold_infernal', type=float, default=0.05, help='E-value threshold for Infernal hits')
+    parser.add_argument('--evalue_threshold_infernal', type=float, default=0.1, help='E-value threshold for Infernal hits')
     parser.add_argument('--len_threshold_blast', type=int, default=40, help='Length threshold for BLAST hits')
     parser.add_argument('--len_threshold_infernal', type=int, default=20, help='Length threshold for Infernal hits')
     parser.add_argument('--from_gff_feature', type=str, default="ID", help='Select which feature show match the string. Default: ID, could also be e.g. product or name')
@@ -163,7 +183,6 @@ def process_neighborhood(args, merged_features, seqs):
         # ---- If it's a gene of interest, process its neighbors ----
         if is_gene_of_interest:
             neighbors = get_neighbor_features(merged_features, idx, args.neighbours)
-
             if neighbors:
                 # Generate TSV entry and write data for each neighbor
                 for neighbor in neighbors:
@@ -223,9 +242,10 @@ def get_neighbor_features(features, index, neighbors):
         up, down = map(int, neighbors.split(','))
         overlaps, upstream, downstream = [], [], []
         for f in features:
+
             if center.seqid != f.seqid or f == center:
                 continue
-
+                
             # Check for overlap
             if not (f.loc.stop < center.loc.start or f.loc.start > center.loc.stop):
                 overlaps.append(f)
@@ -235,18 +255,22 @@ def get_neighbor_features(features, index, neighbors):
                 downstream.append(f)
 
         # Filter overlaps
-        overlaps_filtered = check_overlap(center, overlaps) if overlaps else []
-        #if overlaps and not overlaps_filtered:
-        #    return []
-        result = overlaps_filtered[:]     
+        if overlaps:
+            overlaps_filtered = check_overlap(center, overlaps)
+            if not overlaps_filtered:  # empty → gene did not pass thresholds
+                return []
+            result = overlaps_filtered[:]
+        else:
+            result = [] # no overlapping gene
 
         # Sort and select closest upstream and downstream
         upstream = sorted(upstream, key=lambda x: -x.loc.stop)
-        downstream = sorted(downstream, key=lambda x: x.loc.start)   
+        downstream = sorted(downstream, key=lambda x: x.loc.start)
 
         result.extend(upstream[:up])
         result.extend(downstream[:down])
         result.append(center)
+
         # Return all neighbors sorted by start position
         return sorted(result, key=lambda x: x.loc.start)
 
@@ -257,11 +281,11 @@ def get_neighbor_features(features, index, neighbors):
         stop_pos = center.loc.stop + down
         return [ft for ft in features if ft.loc.start >= start_pos and ft.loc.stop <= stop_pos]
 
-def write_neighbour_data(
-        feature, entry, output_path, seqs,
-        input_type, gene_of_interest
-    ):
+def write_neighbour_data(feature, entry, output_path, seqs, input_type, gene_of_interest):
     """ Write the neighbor's sequence and annotation to the appropriate output files. """
+    
+    base_path = Path(output_path)
+
     # Try to get the sequence by dict or fallback to list
     seq = seqs.d.get(feature.seqid)
     if not seq:
@@ -287,10 +311,27 @@ def write_neighbour_data(
     bio_type = entry.strip().split('\t')[-1]
 
     # Write annotation entry to TSV
-    with open(f'{output_path}.tsv', 'a') as tsv_file:
-        tsv_file.write(entry+"\n")
+    with open(base_path.with_suffix('.tsv'), 'a') as tsv_file:
+        tsv_file.write(entry + "\n")
 
-    # Write sequence to correct output file(s)
+    output_type = FEATURE_TO_OUTPUT_TYPE.get(bio_type)
+
+    if output_type and output_type in OUTPUT_FILES:
+        suffix, should_translate = OUTPUT_FILES[output_type]
+        # Creat outputpath
+        output_file_path = base_path.with_suffix(suffix)
+        
+        with open(output_file_path, 'a') as out_file:
+            out_file.write(header)
+            
+            content = seq_slice
+            if output_type == 'protein' and should_translate:
+                # Translate Biotyp 
+                content = seq_slice.translate(check_start=False, complete=False)
+
+            out_file.write(f'{content}\n')
+    # OLD Write sequence to correct output file(s)
+    """
     for file_type, (suffix, categories) in FILE_MODES.items():
         if bio_type in categories:
 
@@ -302,6 +343,7 @@ def write_neighbour_data(
                 else:
                     content = seq_slice
                 out_file.write(f'{content}\n')
+    """
 
 
 def extract_and_save_promoter_regions(args, feature, seq, entry):
@@ -322,26 +364,45 @@ def extract_and_save_promoter_regions(args, feature, seq, entry):
         mfna_file.write(str(promoter_seq) + '\n')
 
 def main():
+    # 1. Initialise argument parser and read command line arguments
     parser = setup_parser()
     args = parser.parse_args()
+
+    # 2. Validation of the neighbourhood specification (x,y or x:y)
     validate_neighbors(args.neighbours)
-    
-    # Read genome annotation (GFF/GBK)
+
+    # 3. Checking the required input file
+    if args.input_type != 'from_gff' and not args.hit_file:
+        parser.error(f'--hit_file is required for input_type={args.input_type}')
+
+    # 4. Read genome annotation
     gff_features = read_fts(args.gff_file, fmt='gff').select(args.including_features)
-    # Read genome sequence
+
+    # 5. Read genome sequence
     seqs = read(args.fna_file)
 
+    # 6. Case differentiation based on input type
+    # Case A: Input is a hit report (BLAST/Infernal)
     if args.input_type in ['blastn', 'blastp', 'infernal', 'tblastn']:
         # Read and filter hit file using user-specified thresholds
         features_of_gene_of_interest = process_hits(args.hit_file, args.input_type, args.gene_of_interest, args)
-        features_of_gene_of_interest = remove_overlapping_features(features_of_gene_of_interest)
-        
+        # Remove overlapping hits
+        features_of_gene_of_interest = remove_overlapping_features(features_of_gene_of_interest)        
         # Merge BLAST/infernal hits and annotation features
         merged = sorted(list(features_of_gene_of_interest) + list(gff_features), key=lambda x: x.loc.start)
+        # Start finding the neighbours for each gene of interest
         process_neighborhood(args, merged, seqs)
-
+    # Case B: Input is directly a GFF feature (e.g. by ID or product name)
     elif args.input_type == 'from_gff':
+        # Since no hits need to be processed, the analysis is started directly with the GFF features.
         process_neighborhood(args, gff_features, seqs)
+    
+    print("\n✅ Done!")
 
 if __name__ == '__main__':
     main()
+
+"""
+TODO:
+The current logic in get_neighbor_features for “x:y” (nucleotides) is incomplete. It should take into account the boundaries of the genome or not?
+"""
