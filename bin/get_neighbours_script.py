@@ -21,6 +21,8 @@ FEATURE_TO_OUTPUT_TYPE = {
     'misc_RNA': 'srna',
 }
 
+BLAST_FMT = 'qseqid sseqid bitscore evalue pident length mismatch gapopen qstart qend qlen sstart send sstrand slen qseq sseq'
+
 def validate_neighbors(neighbors):
     """Ensure the neighbors parameter is formatted correctly."""
     if ',' not in neighbors and ':' not in neighbors:
@@ -53,14 +55,15 @@ def setup_parser():
 
 def process_hits(hit_file, input_type, gene_of_interest, args):
     """Read and filter hit file (BLAST/Infernal) for the gene of interest."""
+    # 1. Determine the general hit typ
     input_type_key = 'blast' if input_type in {'blastn', 'blastp', 'tblastn'} else 'infernal'
-    blast_fmt = 'qseqid sseqid bitscore evalue pident length mismatch gapopen qstart qend qlen sstart send sstrand slen qseq sseq'
-
+    
+    # 2. Define the parameter map
     params_map = {
         'blast': {
-            'fmt': blast_fmt,
+            'fmt': BLAST_FMT,
             'sort_key': lambda ft: getattr(ft.meta._blast, 'pident', 0),
-            'reader': lambda: read_fts(hit_file, 'blast', outfmt=blast_fmt, ftype=gene_of_interest)
+            'reader': lambda: read_fts(hit_file, 'blast', outfmt=BLAST_FMT, ftype=gene_of_interest)
         },
         'infernal': {
             'fmt': None,
@@ -73,8 +76,11 @@ def process_hits(hit_file, input_type, gene_of_interest, args):
         raise ValueError(f'Unsupported input type: {input_type_key}')
 
     params = params_map[input_type_key]
+
+    # 3. Read features
     features = params['reader']()
 
+    # 4. Dynamic filtering based on type
     if input_type_key == 'blast':
         features = features.select(evalue_lt=args.evalue_threshold_blast)
         features = features.select(len_gt=args.len_threshold_blast)
@@ -82,6 +88,7 @@ def process_hits(hit_file, input_type, gene_of_interest, args):
         features = features.select(evalue_lt=args.evalue_threshold_infernal)
         features = features.select(len_gt=args.len_threshold_infernal)
 
+    # 5. Sort the filtered features
     features.data = sorted(features, key=params['sort_key'], reverse=True)
 
     return features
@@ -95,51 +102,70 @@ def get_orientation(strand):
     """Return 'sense' or 'antisense' based on strand symbol."""
     return 'antisense' if strand == '-' else 'sense'
 
+def _find_feature_name(meta: dict, priority_attrs: tuple, default_name: str = "") -> str:
+    """Attempts to find the feature name from the metadata using a priority list."""
+    for attr in priority_attrs:
+        name = meta.get(attr)
+        if name:
+            return name
+    return default_name
+
+def _get_biotype(feature, meta: dict, args) -> str:
+    """Determines the biotype based on input type and feature metadata."""
+    
+    # 1. Special types for hits (tblastn, infernal)
+    if args.input_type == 'tblastn' and feature.meta._fmt == 'blast':
+        return 'tblastn'
+    if args.input_type == 'infernal' and feature.meta._fmt == 'infernal':
+        return 'infernal'
+        
+    # 2. Preferred biotype fields (gene_biotype, feature type, format)
+    return (
+        meta.get('gene_biotype') or
+        getattr(feature, 'type', None) or
+        meta.get('_fmt') or
+        'unknown' # Fallback
+    )
+
 def generate_entry(feature, counter, args):
     """Create a TSV line for a feature, including seqid, name, coordinates, orientation, and biotype."""
 
-    meta = getattr(feature.meta, f"_{feature.meta._fmt}", {})
+    # Retrieving feature.meta._fmt is the original format type (e.g. “gff”, “blast”).
+    meta_key = f"_{feature.meta._fmt}"
+    meta = getattr(feature.meta, meta_key, {})
+    
+    # Standard priority list for features outside the GFF product special case
+    standard_priority = ('query', 'Name', 'ID', 'qseqid')
 
+    # 1. Decide on a name
     if args.input_type == "from_gff" and args.from_gff_feature == "product":
-        try:
-            if args.gene_of_interest in meta.product:
-                name = args.gene_of_interest.replace(" ","-")
-            else:
-                for attr in ("product", "Name", "ID", "qseqid"):
-                    try:
-                        name = getattr(meta, attr)
-                        break
-                    except AttributeError:
-                        continue
-        except AttributeError:
-            name = meta.ID
-
-    else:
-        for attr in ("query", "Name", "ID", "qseqid"):
-            try:
-                name = getattr(meta, attr)
-                break
-            except AttributeError:
-                continue
+        # Special case: Search for product name in GFF metadata
+        target_product = args.gene_of_interest
+        
+        if meta.get('product') and target_product in meta['product']:
+            name = target_product.replace(" ", "-")
         else:
-            name = ""
+            # Fallback search within the GFF product special case
+            gff_product_priority = ('product', 'Name', 'ID', 'qseqid')
+            name = _find_feature_name(meta, gff_product_priority, default_name=meta.get('ID', ''))
+            
+    else:
+        # Standard case: BLAST/Infernal Hits or GFF search by ID
+        name = _find_feature_name(meta, standard_priority)
+        # Ensure that the name is not empty if ID is available.
+        if not name:
+             name = meta.get('ID', "")
+             
+    # 2. Determine your biotype
+    gene_biotype = _get_biotype(feature, meta, args)
 
+    # 3. Collect remaining fields
     start, stop = str(feature.loc.start), str(feature.loc.stop)
     orientation = get_orientation(feature.loc.strand)
 
-    if args.input_type == 'tblastn' and feature.meta._fmt == 'blast':
-        gene_biotype = 'tblastn'
-    elif args.input_type == 'infernal' and feature.meta._fmt == 'infernal':
-        gene_biotype = 'infernal'
-    else:
-        gene_biotype = (
-            getattr(meta, 'gene_biotype', None) or
-            getattr(feature, 'type', None) or
-            getattr(getattr(feature, 'meta', None), '_fmt', None)
-        )
-
+    # 4. Create TSV line
     fields = [
-        f'{feature.seqid}:{counter}',
+        f'{feature.seqid}:{counter}', # Unique ID
         name,
         start,
         stop,
@@ -325,19 +351,24 @@ def write_neighbour_data(feature, entry, output_path, seqs, input_type, gene_of_
 
 def extract_and_save_promoter_regions(args, feature, seq, entry):
     """ Extract promoter regions for the gene of interest and write them to a new mfna file. """
-    output_file = f"{args.output_path}.promoter.mfna"
+    # 1. Define file path
+    output_path = Path(args.output_path)
+    output_file = output_path.with_suffix('.promoter.mfna')
 
+    # 2. Determine promoter coordinates
     promoter_start = max(0, feature.loc.start - args.promoter_len)
+    promoter_end = feature.loc.start - 1
 
+    # 3. Extract promoter sequence and header
     promoter_entry = f'{entry.split()[0]}\t{entry.split()[1]}\t{promoter_start}\t{feature.loc.start-1}\t{entry.split()[4]}\tpromoter\n'
-    header = f'>{promoter_entry.replace("\t", "_")}'
-
-    promoter_seq = seq[promoter_start:feature.loc.start-1]
+    promoter_header = f'>{promoter_entry.replace("\t", "_").strip()}\n'
+    promoter_seq = seq[promoter_start : promoter_end]
     if feature.loc.strand == '-':
         promoter_seq = promoter_seq.reverse().complement()
 
-    with open(f'{output_file}', 'a') as mfna_file:
-        mfna_file.write(header)
+    # 4. Write data to file
+    with open(output_file, 'a') as mfna_file:
+        mfna_file.write(promoter_header)
         mfna_file.write(str(promoter_seq) + '\n')
 
 def main():
