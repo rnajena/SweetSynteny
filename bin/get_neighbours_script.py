@@ -1,14 +1,6 @@
-import csv
-import os
 import argparse
 from pathlib import Path
 from sugar import read_fts, read, Feature
-
-# Output file modes and feature categories
-#FILE_MODES = {
-#    'protein': ('.protein.mfaa', {'protein_coding', 'pseudogene', 'tblastn', 'CDS'}),
-#    'srna': ('.srna.mfna', {'tRNA', 'infernal', 'ncRNA'})
-#}
 
 OUTPUT_FILES = {
     'protein': ('.protein.mfaa', True),
@@ -330,21 +322,6 @@ def write_neighbour_data(feature, entry, output_path, seqs, input_type, gene_of_
                 content = seq_slice.translate(check_start=False, complete=False)
 
             out_file.write(f'{content}\n')
-    # OLD Write sequence to correct output file(s)
-    """
-    for file_type, (suffix, categories) in FILE_MODES.items():
-        if bio_type in categories:
-
-            with open(f'{output_path}{suffix}', 'a') as out_file:
-                out_file.write(header)
-                if file_type == 'protein' and translate:
-                    # If protein, translate; else, write as is
-                    content = seq_slice.translate(check_start=False,complete=False)
-                else:
-                    content = seq_slice
-                out_file.write(f'{content}\n')
-    """
-
 
 def extract_and_save_promoter_regions(args, feature, seq, entry):
     """ Extract promoter regions for the gene of interest and write them to a new mfna file. """
