@@ -172,6 +172,17 @@ process clusterColoring {
         --cov-mode 1 \\
         --cluster-mode 2
 
+    # TODO hmmscan 
+    # hmmscan \
+    #     --tblout merged.protein.hmm.tbl \\
+    #     --domtblout merged.protein.hmm.domtbl \\
+    #     --cpu 4 \\
+    #     Pfam-A.hmm \\
+    #     merged.protein.mfaa
+    # python /home/we93kif/maria_projects/SweetSynteny/bin/postprocess_hmmscan.py \\
+    #     --hmmscan_file merged.protein.hmm.tbl \\
+    #     --output_file clusterRes.hmm.protein_cluster.tsv
+
     # Cluster ncRNAs
     # Check if file is not empty
     if [ ! -s "merged_neighbours.srna.mfna" ]; then
