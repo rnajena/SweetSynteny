@@ -1,11 +1,20 @@
+# (C) 2024, Maria Schreiber, MIT license
+"""
+This script processes hmmscan output (TSV file), generate a simple mapping file 
+that links each input protein gene to the most statistically significant HMM domain.
+
+postprocess_hmmscan.py \
+    -hf hmmscan_output.tsv \
+    -o output_path
+"""
 import csv
 import argparse
 
 def setup_parser():
     """Configure command-line argument parser."""
     parser = argparse.ArgumentParser(description='Postprocessing sRNA clustering')
-    parser.add_argument('--hmmscan_file', required=True, help='hmmscan file')
-    parser.add_argument('--output_file', required=True, help='Path for output file')
+    parser.add_argument('-hf', '--hmmscan_file', required=True, help='hmmscan file')
+    parser.add_argument('-o', '--output_file', required=True, help='Path for output file')
     return parser
 
 def read_file(hmmscan_file):
@@ -18,7 +27,7 @@ def read_file(hmmscan_file):
             
             # Split on any whitespace
             row = line.strip().split()
-            # Join all columns from index 17 to the end as description
+            # Join all columns from index 18 to the end as description
             description = ' '.join(row[18:])
             
             result = {
