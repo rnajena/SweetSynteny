@@ -3,7 +3,7 @@
 This script processes cmscan output (TSV file), generate a simple mapping file 
 that links each input srna gene to the most statistically significant CM from RFAM.
 
-postprocess_hmmscan.py \
+postprocess_cmscan.py \
     -cf cmscan_file.tsv \
     -o output_path
 """
@@ -13,8 +13,8 @@ import argparse
 def setup_parser():
     """Configure command-line argument parser."""
     parser = argparse.ArgumentParser(description='Postprocessing sRNA clustering')
-    parser.add_argument('--cmscan_file', required=True, help='Cmscan file')
-    parser.add_argument('--output_file', required=True, help='Path for output file')
+    parser.add_argument('-cf', '--cmscan_file', required=True, help='Cmscan file')
+    parser.add_argument('-o', '--output_file', required=True, help='Path for output file')
     return parser
 
 def read_file(cmscan_file):
