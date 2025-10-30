@@ -1,49 +1,54 @@
+# (C) 2024, Maria Schreiber, MIT license
+"""
+This script processes hmmscan output (TSV file), generate a simple mapping file 
+that links each input protein gene to the most statistically significant HMM domain.
+
+postprocess_hmmscan.py \
+    -hf hmmscan_output.tsv \
+    -o output_path
+"""
 import csv
 import argparse
 
 def setup_parser():
     """Configure command-line argument parser."""
     parser = argparse.ArgumentParser(description='Postprocessing sRNA clustering')
-    parser.add_argument('--cmscan_file', required=True, help='Cmscan file')
-    parser.add_argument('--output_file', required=True, help='Path for output file')
+    parser.add_argument('-hf', '--hmmscan_file', required=True, help='hmmscan file')
+    parser.add_argument('-o', '--output_file', required=True, help='Path for output file')
     return parser
 
-def read_file(cmscan_file):
+def read_file(hmmscan_file):
     results = []
 
-    with open(cmscan_file, 'r') as f:
+    with open(hmmscan_file, 'r') as f:
         for line in f:
             if line.startswith('#') or not line.strip():
                 continue  # skip header and empty lines
             
             # Split on any whitespace
             row = line.strip().split()
-            
-            # The fixed columns count is 17 before description (index 0 to 16)
-            if len(row) < 18:
-                continue  # skip malformed lines
-            
-            # Join all columns from index 17 to the end as description
-            description = ' '.join(row[17:])
+            # Join all columns from index 18 to the end as description
+            description = ' '.join(row[18:])
             
             result = {
                 'target_name': row[0],
                 'target_accession': row[1],
                 'query_name': row[2],
                 'query_accession': row[3],
-                'mdl': row[4],
-                'mdl_from': row[5],
-                'mdl_to': row[6],
-                'seq_from': row[7],
-                'seq_to': row[8],
-                'strand': row[9],
-                'trunc': row[10],
-                'pass': row[11],
-                'gc': row[12],
-                'bias': row[13],
-                'score': row[14],
-                'e_value': row[15],
-                'inc': row[16],
+                'Evalue_fullSeq': row[4],
+                'score_fullSeq': row[5],
+                'bias_fullSeq': row[6],
+                'Evalue_bestDom': row[7],
+                'score_bestDom': row[8],
+                'bias_bestDom': row[9],
+                'exp': row[10],
+                'reg': row[11],
+                'clu': row[12],
+                'ov': row[13],
+                'env': row[14],
+                'dom': row[15],
+                'rep': row[16],
+                'inc': row[17],
                 'description': description
             }
             results.append(result)
@@ -56,8 +61,8 @@ def filter_hits(results):
     best_hits = {}
     for entry in results:
         qname = entry['query_name']
-        evalue = float(entry['e_value'].replace('e', 'E'))  # handle scientific notation
-        if qname not in best_hits or evalue < float(best_hits[qname]['e_value'].replace('e', 'E')):
+        evalue = float(entry['Evalue_fullSeq'].replace('e', 'E'))  # handle scientific notation
+        if qname not in best_hits or evalue < float(best_hits[qname]['Evalue_fullSeq'].replace('e', 'E')):
             best_hits[qname] = entry
 
     # To get the filtered list:
@@ -77,9 +82,9 @@ def main():
     parser = setup_parser()
     args = parser.parse_args()
     
-    cmscan_lst = read_file(args.cmscan_file)
-    filtered_cm_lst = filter_hits(cmscan_lst)
-    write_output(filtered_cm_lst, args.output_file)
+    hmmscan_lst = read_file(args.hmmscan_file)
+    filtered_hmm_lst = filter_hits(hmmscan_lst)
+    write_output(filtered_hmm_lst, args.output_file)
 
 if __name__ == '__main__':
     main()
