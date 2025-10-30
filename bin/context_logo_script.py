@@ -1,4 +1,12 @@
 # (C) 2024, Tom Eulenfeld & Maria Schreiber, MIT license
+"""
+This script processes color sequences from a TSV file, performs multiple sequence alignment using MAFFT, 
+calculates bit scores for color-coded features, and generates visualizations in PNG and SVG formats.
+
+context_logo_script.py \
+    -i special_input_file \
+    -o output_path
+"""
 import argparse
 from collections import Counter
 import matplotlib.pyplot as plt
