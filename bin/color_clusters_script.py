@@ -1,19 +1,31 @@
-import pandas as pd
+# (C) 2024, Maria Schreiber, MIT license
+"""
+This script annotates genomic features (like proteins or sRNAs) with a distinct color derived 
+from their cluster membership and generates a statistical summary visualization of the results.
+
+color_clusters_script.py \
+    --cluster_file \ 
+    --tsv_file \
+    --output_file \
+    --gene_of_interest
+    ( --size_for_cluster )
+"""
 import argparse
 import colorsys
 import csv
-import os
 import matplotlib.pyplot as plt
 import numpy as np
+import os
+import pandas as pd
 
 def setup_parser():
     """Configure command-line argument parser."""
     parser = argparse.ArgumentParser(description='Annotate genomic features with cluster colors')
-    parser.add_argument('--cluster_file', required=True, help='MMseqs2 cluster TSV file')
-    parser.add_argument('--tsv_file', required=True, help='Input features TSV file')
-    parser.add_argument('--output_file', required=True, help='Path for colored output file')
-    parser.add_argument('--gene_of_interest', required=True, help='TODO')
-    parser.add_argument('--size_for_cluster', type=int, default=2, help='Defines at which cluster size, a cluster gets a color.')
+    parser.add_argument('--cluster_file', required=True, help='Input TSV file defining gene cluster membership (based on MMseqs2, cmscan, or hmmscan result).')
+    parser.add_argument('--tsv_file', required=True, help='Neighbour TSV file containing features name, locations, etc.')
+    parser.add_argument('--output_file', required=True, help='Path for the final output TSV file containing the original features plus the assigned cluster color.')
+    parser.add_argument('--gene_of_interest', required=True, help='Identifier (name) of the gene or feature of interest.')
+    parser.add_argument('--size_for_cluster', type=int, default=2, help='Minimum number of members a cluster must have to be assigned a unique color.\nSmaller clusters will be assigned the default white color.')
     return parser
 
 def generate_distinct_colors(num_colors):
@@ -54,11 +66,12 @@ def process_clusters(cluster_file, size_for_cluster=2):
     filtered_clusters = {k: v for k, v in cluster_map.items() if len(v) >= size_for_cluster}
     colors = generate_distinct_colors(len(filtered_clusters))
 
+    # Remove all '#FFFFFF' entries
+    colors = [color for color in colors if color != '#FFFFFF']
+
     # Create direct member-color mapping
     color_map = {}
     for (cluster_id, members), color in zip(filtered_clusters.items(), colors):
-        if color == '#FFFFFF': # White is for clusters with only 1 sequence
-            continue
         for member in members:            
             color_map[member] = color
     return color_map
@@ -179,29 +192,32 @@ def summary(gene_of_interest, df, output_file):
 
     # 4th subplot
     if distances:
-        n, bins, patches = axs[3].hist(distances, bins='auto', color='purple', alpha=0.7)
-        # Calculate bin centers as midpoints between bin edges
+        # Define bins at every 10 units, spanning from min to max distance
+        bin_edges = np.arange(0, max(distances) + 10, 10)
+        n, bins, patches = axs[3].hist(distances, bins=bin_edges, color='purple', alpha=0.7)
+        
+        # Bin centers for tick positions
         bin_centers = 0.5 * (bins[:-1] + bins[1:])
-        # Set x-axis tick positions at bin centers
         axs[3].set_xticks(bin_centers)
-        # Set tick labels with integer distances + unit
         axs[3].set_xticklabels([f"{int(x)}" for x in bin_centers], rotation=90, fontsize=9)
 
         axs[3].set_title(f"Distance distribution around gene '{gene_of_interest}'")
         axs[3].set_xlabel("Distance (nt)")
         axs[3].set_ylabel("Frequency")
     else:
-        axs[3].set_text(0.5, 0.5, "No adjacent gene distances found", ha='center', va='center', fontsize=12)
-        axs[3].set_axis('off')
+        axs[3].text(0.5, 0.5, "No adjacent gene distances found", ha='center', va='center', fontsize=12)
+        axs[3].set_axis_off()
 
     if len(colors_per_genome) > 50:
-        axs[3].set_xticks([])   # hide if too many
+        axs[3].set_xticks([])
     else:
         axs[3].tick_params(axis='x', rotation=90)
 
     plt.tight_layout()
-    plt.savefig(output_file.replace("/merged_with_color.tsv","") + "/summary.png")
-    plt.savefig(output_file.replace("/merged_with_color.tsv","") + "/summary.svg")
+    temp_path = os.path.dirname(output_file)
+    print(temp_path)
+    plt.savefig(temp_path + "/summary.png")
+    plt.savefig(temp_path + "/summary.svg")
 
 def main():
     parser = setup_parser()
