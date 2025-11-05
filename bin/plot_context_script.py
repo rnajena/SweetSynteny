@@ -1,3 +1,4 @@
+# (C) 2024, Maria Schreiber, MIT license
 import os
 import argparse
 import pandas as pd
@@ -12,6 +13,9 @@ import matplotlib.cm as cm
 from sklearn.decomposition import PCA
 import sys
 sys.setrecursionlimit(100000)
+from collections import Counter
+from sklearn.metrics.pairwise import cosine_similarity
+
 
 def setup_parser_func():
     '''Set up and return the argument parser.'''
@@ -23,6 +27,7 @@ def setup_parser_func():
     parser.add_argument('--cluster', type=int, default=2, help='Minimal size for a cluster')
     parser.add_argument('--threshold', type=float, default=0.9, help='Similarity threshold for clustering')
     parser.add_argument('--gene_of_interest', required=True, help='gene_of_interest') 
+    parser.add_argument('--gene_name', required=False, default='db', help='gene_of_interest') 
     parser.add_argument('--name_file', required=False, help='Renaming contigs to genome names')
     parser.add_argument('--gene_lable', required=False, choices=['yes', 'no'], help='Add lables to gene [no as default]') 
     parser.add_argument('--cut_height_args', type=float, default=0, help='Cut threshold for dendogram clustering.')
@@ -49,16 +54,23 @@ def process_group_func(group, gene_of_interest):
 
     return group
 
-def prepare_dataframe_func(input_file, gene_of_interest, genome_name_tsv=''):
+def prepare_dataframe_func(input_file, gene_of_interest, gene_name, genome_name_tsv=''):
     '''Read and prepare the input dataframe.'''
-    header = ['genome', 'gene', 'start', 'end', 'orientation', 'type', 'cluster_color']
+    header = ['genome', 'gene_id', 'start', 'end', 'orientation', 'type', 'cluster_color', 'gene_db']
     df = pd.read_csv(input_file, sep='\t', header=None, names=header)
+
     df['length'] = abs(df['start'] - df['end'])
     df['contig'] = df['genome'].str.split(':', n=1).str[0]
     df['orientation'] = df['orientation'].apply(map_ori_func)
     df['original_start'] = df['start']
     df['original_end'] = df['end']
     
+    if gene_name == 'db':
+        df['gene'] = df['gene_db']
+    
+    if gene_name == 'id':
+        df['gene'] = df['gene_id']
+
     if genome_name_tsv:
         rename_df = pd.read_csv(genome_name_tsv, sep='\t')
         merged = df.merge(rename_df[['contig', 'organism_name']], 
@@ -77,10 +89,9 @@ def prepare_dataframe_func(input_file, gene_of_interest, genome_name_tsv=''):
 
     # Concatenate all the DataFrames into one
     big_df = pd.concat(dfs, ignore_index=True)
-    
     return big_df
 
-def cluster_genomes_func(df, output_path, output_ending, cut_height=0, cluster=2, threshold=0.1):
+def cluster_genomes_func(df, output_path, output_ending, cut_height_para, cluster=2, threshold=0.1):
     '''Cluster genomes based on feature matrix.'''
 
     unique_colors = df['cluster_color'].unique()
@@ -95,39 +106,121 @@ def cluster_genomes_func(df, output_path, output_ending, cut_height=0, cluster=2
 
     X = feature_matrix_color.values
 
+    def refine_clusters_by_distance(X_cluster, clustered_labels_series, refinement_cut_factor=0.5):
+        """Performs secondary, localized hierarchical clustering within each primary cluster
+        to refine assignments."""
+        
+        # Ensure X_cluster is a DataFrame for robust index access
+        if not isinstance(X_cluster, pd.DataFrame):
+            X_cluster = pd.DataFrame(X_cluster, index=clustered_labels_series.index)
+            
+        unique_primary_clusters = sorted(clustered_labels_series.unique())
+        current_max_label = clustered_labels_series.max()
+        new_labels = clustered_labels_series.copy()
+        
+        for cluster_id in unique_primary_clusters:
+            # 1. Isolate the data for the current primary cluster
+            cluster_indices = clustered_labels_series[clustered_labels_series == cluster_id].index
+            X_sub = X_cluster.loc[cluster_indices]
+            
+            # Only recluster if there are enough points
+            if len(X_sub) <= 2:
+                continue
+
+            try:
+                # 2. Perform new, localized hierarchical clustering
+                # Use .values to explicitly pass a NumPy array to pdist
+                matrix_sub = pdist(X_sub.values, metric='euclidean')
+                clustering_sub = linkage(matrix_sub, method='average') # Assuming the same method
+
+                # 3. Calculate a local cut height
+                max_local_dist = max(clustering_sub[:, 2]) if clustering_sub.size > 0 else 0
+                
+                # Apply cut only if there is structure to cut
+                if max_local_dist > 0.001: 
+                    local_cut_height = refinement_cut_factor * max_local_dist
+                    
+                    # 4. Find new sub-cluster labels
+                    local_sub_labels = fcluster(clustering_sub, t=local_cut_height, criterion="distance")
+                    local_sub_labels_series = pd.Series(local_sub_labels, index=X_sub.index)
+
+                    # Check if refinement actually created sub-clusters
+                    num_sub_clusters = local_sub_labels_series.max()
+                    
+                    if num_sub_clusters > 1:
+                        # 5. Relabel sub-clusters with globally unique IDs
+                        
+                        # The first sub-cluster keeps the original ID, others get new IDs
+                        new_sub_cluster_labels = local_sub_labels_series.copy()
+                        
+                        for sub_label in range(2, num_sub_clusters + 1):
+                            current_max_label += 1
+                            # Assign new global ID to the sub-cluster
+                            new_sub_cluster_labels[local_sub_labels_series == sub_label] = current_max_label
+                        
+                        # Update the global label series
+                        new_labels.loc[cluster_indices] = new_sub_cluster_labels
+                        print(f"  -> Split into {num_sub_clusters} sub-clusters. New global max ID: {current_max_label}")
+                    else:
+                        print("  -> No significant sub-structure found for refinement.")
+
+                else:
+                    print("  -> Trivial cluster structure (max internal distance is zero).")
+            
+            except ValueError as e:
+                # Catch cases where linkage fails on very small or identical subsets
+                print(f"  -> Could not recluster (Error: {e}). Skipping.")
+                continue
+                
+        print("--- Refinement Complete ---")
+        return new_labels
 
     def create_dendrogram_with_preassign(
-        X, feature_matrix_color, metric, method, name, output_path, cut_height=0
-    ):
-        # --- Step 1: Pre-assign cluster labels for simple cases ---
+        X, feature_matrix_color, metric, method, name, output_path, cut_height_para=0.25, filter_row_sum_1=True
+        ):  
+        # 1 Pre-assign cluster labels for simple cases
         preassigned = {}
         clustering_mask = []
+
         for genome in feature_matrix_color.index:
             row_sum = feature_matrix_color.loc[genome].sum()
-            if row_sum == 1:  
+            if filter_row_sum_1 and row_sum == 1:
                 preassigned[genome] = -2
                 clustering_mask.append(False)
-            elif row_sum == 2:
+            elif filter_row_sum_1 and row_sum == 2:
                 preassigned[genome] = -1
                 clustering_mask.append(False)
             else:
                 clustering_mask.append(True)
         clustering_mask = np.array(clustering_mask)
-
-        # --- Step 2: Hierarchical clustering ---
         X_cluster = X[clustering_mask]
-        distance_matrix = pdist(X_cluster, metric=metric)
-        clustering = linkage(distance_matrix, method=method)
 
-        if cut_height == 0:
-            cut_height = 0.1 * max(clustering[:, 2])
+        # 2 Primary hierarchical clustering
+        matrix = pdist(X_cluster, metric=metric)
+        clustering = linkage(matrix, method=method)
+        
+        max_dist = max(clustering[:, 2]) if clustering.size > 0 else 0
+        cut_height = cut_height_para * max(clustering[:, 2])
 
-        # --- Step 3: Cluster assignments ---
+        # 3 Cluster assignments
         clustered_labels = fcluster(clustering, t=cut_height, criterion="distance")
-        clustered_labels_series = pd.Series(
-            clustered_labels, index=feature_matrix_color.index[clustering_mask]
+
+        if filter_row_sum_1:
+            clustered_labels_series = pd.Series(
+                clustered_labels, index=feature_matrix_color.index[clustering_mask]
+            )
+
+        if filter_row_sum_1 == False:
+            clustered_labels_series = pd.Series(
+                clustered_labels, index=feature_matrix_color.index
+            )
+
+        # Apply secondary clustering within primary cluster
+        refined_labels_series = refine_clusters_by_distance(
+            X_cluster, clustered_labels_series, refinement_cut_factor=0.5
         )
 
+        # Re-integrate pre-assigned and clustered labels
         all_labels = pd.Series(index=feature_matrix_color.index, dtype=int)
         for genome in feature_matrix_color.index:
             if genome in preassigned:
@@ -136,7 +229,7 @@ def cluster_genomes_func(df, output_path, output_ending, cut_height=0, cluster=2
                 all_labels[genome] = clustered_labels_series[genome]
         all_labels = all_labels.astype(int)
 
-        # --- Step 4: Assign unique colors to clusters ---
+        # 4 Assign unique colors to clusters
         import matplotlib.colors as mcolors
         import matplotlib.patches as mpatches
         unique_clusters = sorted(set(clustered_labels))
@@ -145,7 +238,7 @@ def cluster_genomes_func(df, output_path, output_ending, cut_height=0, cluster=2
             cl: mcolors.to_hex(cmap(i)) for i, cl in enumerate(unique_clusters)
         }
 
-        # --- Step 5: Node color function ---
+        # 5 Node color
         def link_color_func(node_id):
             # leaf node
             if node_id < len(X_cluster):
@@ -161,7 +254,7 @@ def cluster_genomes_func(df, output_path, output_ending, cut_height=0, cluster=2
                 else:
                     return "grey"
 
-        # --- Step 6: Plot dendrogram ---
+        # 6 Plot dendrogram
         plt.figure(figsize=(10, 5))
         dendrogram(
             clustering,
@@ -170,14 +263,16 @@ def cluster_genomes_func(df, output_path, output_ending, cut_height=0, cluster=2
             leaf_rotation=90,
             no_labels=True
         )
-
+        
+        cluster_counts = Counter(all_labels)
         # Create legend handles with cluster IDs and colors
         legend_handles = []
         for cluster_id, color in cluster_to_color.items():
+            count = cluster_counts.get(cluster_id, 0)
             if cluster_id < 0:
                 label = f"Preassigned {cluster_id}"
             else:
-                label = f"Cluster {cluster_id}"
+                label = f"Cluster {cluster_id} ({count} leaves)"
             patch = mpatches.Patch(color=color, label=label)
             legend_handles.append(patch)
 
@@ -194,24 +289,6 @@ def cluster_genomes_func(df, output_path, output_ending, cut_height=0, cluster=2
 
         return clustering, cut_height, all_labels
 
-    ward_clustering_cosinus, ward_cut_height_cosinus, ward_cosinus = create_dendrogram_with_preassign(
-        X,                       # full feature matrix used for clustering
-        feature_matrix_color,    # dataframe with your "colors"
-        metric="cosine",         # cosine similarity distance
-        method="ward", 
-        name="ward_cosinus_clustering",
-        output_path=output_path  # where to save figures
-    )
-
-    ward_clustering_jaccard, ward_cut_height_jaccard, ward_jaccard = create_dendrogram_with_preassign(
-        X, 
-        feature_matrix_color,
-        metric="jaccard", 
-        method="ward", 
-        name="ward_jaccard_clustering",
-        output_path=output_path
-    )
-    
     def non_or_one_color(cluster_labels, feature_matrix_color):
         for genome in feature_matrix_color.index:
             if feature_matrix_color.loc[genome].sum() == 1:
@@ -228,23 +305,40 @@ def cluster_genomes_func(df, output_path, output_ending, cut_height=0, cluster=2
         
         return cluster_labels_values
 
-    # --- DBSCAN clustering ---
-    print('dbscan')
-    dbscan_labels_reduced, _ = dimensionreduction_visualize_pca(feature_matrix_color, output_path, 'dbscan')
+    dbscan_labels_reduced, _ = dimensionreduction_visualize_pca(feature_matrix_color, output_path, 'dbscan', cluster, threshold)
     dbscan_labels_series = pd.Series(dbscan_labels_reduced, index=feature_matrix_color.index)
     dbscan = dbscan_labels_series.values
-    # -------------------------
+    #----------------------
 
-    # --- Birch clustering --- (Balanced Iterative Reducing and Clustering using Hierarchies) 
-    print('birch')
-    birch_labels_reduced, _ = dimensionreduction_visualize_pca(feature_matrix_color, output_path, 'birch')
-    birch_labels_series = pd.Series(birch_labels_reduced, index=feature_matrix_color.index)
-    birch = birch_labels_series.values
-    # -------------------------
+    # Birch clustering (Balanced Iterative Reducing and Clustering using Hierarchies) 
+    #birch_labels_reduced, _ = dimensionreduction_visualize_pca(feature_matrix_color, output_path, 'birch', cluster, threshold)
+    #birch_labels_series = pd.Series(birch_labels_reduced, index=feature_matrix_color.index)
+    #birch = birch_labels_series.values
+    #----------------------
 
-    return ward_cosinus, ward_jaccard, dbscan, birch, feature_matrix_color
+    ward_clustering_cosinus, ward_cut_height_cosinus, ward_cosinus = create_dendrogram_with_preassign(
+        X,                       # full feature matrix used for clustering
+        feature_matrix_color,    # dataframe with your "colors"
+        metric="cosine",         # cosine similarity distance
+        method="ward", 
+        name="ward_cosinus_clustering",
+        output_path=output_path,
+        cut_height_para=cut_height_para
+    )
 
-def dimensionreduction_visualize_pca(feature_matrix_color, output_path, folder):
+    ward_clustering_jaccard, ward_cut_height_jaccard, ward_jaccard = create_dendrogram_with_preassign(
+        X, 
+        feature_matrix_color,
+        metric="jaccard", 
+        method="ward", 
+        name="ward_jaccard_clustering",
+        output_path=output_path,
+        cut_height_para=cut_height_para
+    )    
+        
+    return dbscan, ward_cosinus, ward_jaccard, feature_matrix_color # ward_dice, birch, 
+
+def dimensionreduction_visualize_pca(feature_matrix_color, output_path, folder, cluster=2, threshold=0.2):
     # Reduce data to 2D for plotting # Cluster the Reduced Data
     X = feature_matrix_color.values
 
@@ -268,16 +362,16 @@ def dimensionreduction_visualize_pca(feature_matrix_color, output_path, folder):
     reduced_PCA = pca.fit_transform(X_cluster)
 
     if folder == 'dbscan':
-        dbscan = DBSCAN(eps=0.1, min_samples=2) 
+        dbscan = DBSCAN(eps=threshold, min_samples=cluster) 
         clusters = dbscan.fit_predict(reduced_PCA)
 
-    if folder == 'birch':
-        birch = Birch(n_clusters=None)
-        clusters = birch.fit_predict(reduced_PCA)
+    #if folder == 'birch':
+    #    birch = Birch(n_clusters=None)
+    #    clusters = birch.fit_predict(reduced_PCA)
 
     # Now merge preassigned clusters into full cluster array
     full_clusters = np.empty(len(feature_matrix_color), dtype=int)
-    full_clusters[:] = -99  # default placeholder for debug/error
+    full_clusters[:] = -99  # default placeholder
 
     # Fill preassigned
     preassigned_indices = np.where(~clustering_mask)[0]
@@ -298,8 +392,11 @@ def dimensionreduction_visualize_pca(feature_matrix_color, output_path, folder):
         for i, (cluster_label, count) in enumerate(zip(unique_clusters, counts))
     ]
     plt.legend(handles=legend_handles, title='Clusters', bbox_to_anchor=(1.05, 1), loc='upper left')
-    plt.xlabel('Principal Component 1')
-    plt.ylabel('Principal Component 2')
+    variance_1 = pca.explained_variance_ratio_[0] * 100
+    variance_2 = pca.explained_variance_ratio_[1] * 100
+
+    plt.xlabel(f'PC 1 ({variance_1:.2f}% variance)')
+    plt.ylabel(f'PC 2 ({variance_2:.2f}% variance)')
     plt.title('Clustering on PCA-reduced data')
     plt.tight_layout()
     plt.savefig(f'{output_path}/{folder}/PCA.REDUCED.{folder}.png')
@@ -308,7 +405,7 @@ def dimensionreduction_visualize_pca(feature_matrix_color, output_path, folder):
 
     return full_clusters, clusters
 
-def plot_cluster_func(cluster_df, output_path, output_ending, scale, gene_of_interest, gene_lable, folder, max_subplots=20):
+def plot_cluster_func(cluster_df, output_path, output_ending, scale, gene_of_interest, gene_lable, folder, max_subplots=15):
     '''Generate plots for a cluster.'''
     genome_groups = list(cluster_df.groupby('genome'))
     num_subplots = int(np.ceil(len(genome_groups) / max_subplots))
@@ -322,7 +419,7 @@ def plot_cluster_func(cluster_df, output_path, output_ending, scale, gene_of_int
         if not subplot_genomes:  # Added validation
             continue
             
-        fig, axes = plt.subplots(len(subplot_genomes), 1, figsize=(10, len(subplot_genomes) * 0.9))
+        fig, axes = plt.subplots(len(subplot_genomes), 1, figsize=(12, len(subplot_genomes) * 1.2))
         axes = [axes] if len(subplot_genomes) == 1 else axes
 
         for i, (genome_name, genome_df) in enumerate(subplot_genomes):
@@ -339,12 +436,39 @@ def plot_cluster_func(cluster_df, output_path, output_ending, scale, gene_of_int
             ]
             fig.legend(handles=legend_handles, title='Legend', bbox_to_anchor=(1.05, 1), loc='upper left')
 
-        plt.tight_layout()
+        # If further spacing needed:
+        plt.subplots_adjust(left=0.1, right=0.8, hspace=0.75)  # shrink plot area for 
+
         count = f'{cluster_df['cluster_label'].iloc[0]}.{subplot_idx}'
         fig.savefig(f'{output_path}/{folder}/{count}.png', bbox_inches='tight')
         fig.savefig(f'{output_path}/{folder}/{count}.svg', bbox_inches='tight')
 
         plt.close(fig)
+
+def scale_genes(df, gene_name, target_length=50):
+    # Find the row with the specified gene
+    goi_row = df[df['gene'] == gene_name].iloc[0]
+
+    # Calculate the current length of the CrfA gene
+    crfa_length = goi_row['end'] - goi_row['start'] + 1
+
+    # Calculate scale factor
+    scale_factor = target_length / crfa_length
+    # Reference position is the minimum start to maintain relative distances
+    ref_start = df['start'].min()
+
+    # Function to calculate adjusted positions
+    def adjusted_positions(row):
+        original_length = row['end'] - row['start'] + 1
+        scaled_length = int(original_length * scale_factor)
+        scaled_start = int((row['start'] - ref_start) * scale_factor)
+        scaled_end = scaled_start + scaled_length - 1
+        return pd.Series({'adjusted_start': scaled_start, 'adjusted_end': scaled_end})
+
+    # Apply the function and assign new columns
+    df[['adjusted_start', 'adjusted_end']] = df.apply(adjusted_positions, axis=1)
+
+    return df
 
 def plot_genome_func(genome_df, ax, scale, gene_of_interest, gene_lable='no'):
     '''Plot a single genome.'''
@@ -357,9 +481,9 @@ def plot_genome_func(genome_df, ax, scale, gene_of_interest, gene_lable='no'):
     min_start = int(df['start'].min())
 
     if scale.lower() == 'yes':
-        df['adjusted_start'] = (df['start'] - min_start).astype(int)
-        df['adjusted_end'] = (df['adjusted_start'] + df['length']).astype(int)
-        seqlen_distance = (df['adjusted_end'].max() - df['adjusted_start'].min()).astype(int)
+        df = scale_genes(df, gene_of_interest)
+        seqlen_distance = (df['adjusted_end'].max() - df['adjusted_start'].min()).astype(int)# Drop the original 'start' and 'end' columns
+    
     else:
         max_distance = 0
         df['adjusted_start'] = (df['start'] - min_start) / 1000
@@ -398,11 +522,11 @@ def plot_genome_func(genome_df, ax, scale, gene_of_interest, gene_lable='no'):
                                         seqlen=seqlen_distance, figsize=(7, 5),
                                         with_ruler=False, show=False, 
                                         labels_spacing=60, fontdict={'fontsize': 7})
+    # color dic for legend
     return clean_color_dic, df
 
 def cosine_similarity(matrix):
     ''' Calculate norms of vectors & Scalar product matrix & External product norms and elementwise division -> Cosine similarity matrix '''
-
     norms = np.linalg.norm(matrix, axis=1)
     dot_products = np.dot(matrix, matrix.T)
     norm_matrix = np.outer(norms, norms)
@@ -429,14 +553,16 @@ def main():
         args = parser.parse_args()
 
         #try:
-        df = prepare_dataframe_func(args.input_file, args.gene_of_interest, args.name_file)
-        
-        ward_labels_cosinus, ward_labels_jaccard, dbscan_lables, birch_labels, feature_matrix_color = cluster_genomes_func(df, args.output_path, args.output_ending, args.cut_height_args, args.cluster, args.threshold)
-
-        lst = ['ward_cosinus', 'ward_jaccard', 'dbscan', 'birch']
+        print("Read data")
+        df = prepare_dataframe_func(args.input_file, args.gene_of_interest, args.gene_name, args.name_file)
+        print("Process for clustering")
+        dbscan_lables, ward_labels_cosinus, ward_labels_jaccard, feature_matrix_color = cluster_genomes_func(df, args.output_path, args.output_ending, args.cut_height_args, args.cluster, args.threshold)
+        print("Finished clustering")
+        lst = ['dbscan', 'ward_cosinus', 'ward_jaccard'] # 'dice' 'birch' 'complete', 'average', 'single', 'centroid', 'weighted', 'kmeans', 'hdbscan', 
         i = 0
-        
-        for labels in [ward_labels_cosinus, ward_labels_jaccard, dbscan_lables, birch_labels]:
+
+        for labels in [dbscan_lables, ward_labels_cosinus, ward_labels_jaccard]: # , ward_labels_dice, birch_labels
+            print("Plots " + str(lst[i]))
             # correlation of cluster labels to each genome
             genome_to_cluster = pd.Series(labels, index=feature_matrix_color.index).groupby(level=0).first()
 
@@ -448,7 +574,7 @@ def main():
             
             cluster_stats = []
             for cluster_label, cluster_df in df.groupby('cluster_label'):
-
+                
                 for_aln(cluster_label, lst[i], cluster_df, args.output_path)
 
                 # If the list is not empty, check if any contigs in the current cluster_df are in the unique_contigs list
@@ -467,7 +593,7 @@ def main():
                         'genomes': cluster_size})
                     continue  # Skip Noise Cluster
 
-                # ------------------------------------------------
+                #---------------------------------------------
                 # Compute cosine Similarity for Clusters
                 cluster_genomes_for_cosine = feature_matrix_color.loc[genome_to_cluster[genome_to_cluster == cluster_label].index]
 
