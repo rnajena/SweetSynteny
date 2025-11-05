@@ -1,3 +1,4 @@
+# (C) 2024, Maria Schreiber, MIT license
 import argparse
 from pathlib import Path
 from sugar import read_fts, read, Feature
