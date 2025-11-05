@@ -15,6 +15,7 @@ def setup_parser():
     parser = argparse.ArgumentParser(description='Postprocessing sRNA clustering')
     parser.add_argument('-cf', '--cmscan_file', required=True, help='Cmscan file')
     parser.add_argument('-o', '--output_file', required=True, help='Path for output file')
+    parser.add_argument('-gof', '--gene_of_interest', required=True, help='Name of gene of interest.')
     return parser
 
 def read_file(cmscan_file):
@@ -66,7 +67,9 @@ def filter_hits(results):
     for entry in results:
         qname = entry['query_name']
         evalue = float(entry['e_value'].replace('e', 'E'))  # handle scientific notation
-        if qname not in best_hits or evalue < float(best_hits[qname]['e_value'].replace('e', 'E')):
+        if qname not in best_hits:
+            best_hits[qname] = entry
+        elif evalue < float(best_hits[qname]['e_value'].replace('e', 'E')):
             best_hits[qname] = entry
 
     # To get the filtered list:
@@ -74,13 +77,17 @@ def filter_hits(results):
 
     return filtered_results
 
-def write_output(filtered_results, output_file):
+def write_output(filtered_results, output_file, gene_of_interest):
     """Write the filtered results to a TSV file with a header."""
     
     with open(output_file, 'a', newline='') as f:
         writer = csv.writer(f, delimiter='\t')
         for entry in filtered_results:
-            writer.writerow([entry['target_accession'], entry['query_name']])
+            if gene_of_interest in entry['query_name']:
+                target_name = gene_of_interest
+            else:
+                target_name = entry['target_name']
+            writer.writerow([entry['target_accession'], entry['query_name'], target_name])
 
 def main():
     parser = setup_parser()
@@ -88,7 +95,7 @@ def main():
     
     cmscan_lst = read_file(args.cmscan_file)
     filtered_cm_lst = filter_hits(cmscan_lst)
-    write_output(filtered_cm_lst, args.output_file)
+    write_output(filtered_cm_lst, args.output_file, args.gene_of_interest)
 
 if __name__ == '__main__':
     main()
