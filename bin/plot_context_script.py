@@ -511,18 +511,12 @@ def plot_genome_func(genome_df, ax, scale, gene_of_interest, gene_lable='no'):
             hatch_dic[gene] = hatch
         else:
             clean_color_dic[gene] = color_hatch  # just hex color, no hatch
-
-    if gene_lable=='no':
-        FeatureList(features).plot_ftsviewer(ax=ax, label=None,
-                                        colorby='name', color=clean_color_dic,
-                                        seqlen=seqlen_distance, figsize=(7, 5),
-                                        with_ruler=False, show=False)
-    else:
-        FeatureList(features).plot_ftsviewer(ax=ax, label='name',
-                                        colorby='name', color=clean_color_dic,
-                                        seqlen=seqlen_distance, figsize=(7, 5),
-                                        with_ruler=False, show=False,
-                                        labels_spacing=60, fontdict={'fontsize': 7})
+    FeatureList(features).plot_ftsviewer(
+        ax=ax, label=None if gene_lable=='no' else 'name',
+        colorby='name', color=clean_color_dic,
+        seqlen=seqlen_distance, figsize=(7, 5),
+        with_ruler=False, show=False,
+        labels_spacing=60, fontdict={'fontsize': 7})
     # color dic for legend
     return clean_color_dic, df
 
