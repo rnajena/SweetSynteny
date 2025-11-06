@@ -439,7 +439,7 @@ def plot_cluster_func(cluster_df, output_path, output_ending, scale, gene_of_int
         # If further spacing needed:
         plt.subplots_adjust(left=0.1, right=0.8, hspace=0.75)  # shrink plot area for
 
-        count = f'{cluster_df['cluster_label'].iloc[0]}.{subplot_idx}'
+        count = f"{cluster_df['cluster_label'].iloc[0]}.{subplot_idx}"
         fig.savefig(f'{output_path}/{folder}/{count}.png', bbox_inches='tight')
         fig.savefig(f'{output_path}/{folder}/{count}.svg', bbox_inches='tight')
 
