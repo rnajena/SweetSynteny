@@ -9,7 +9,6 @@ from sugar import Feature, FeatureList
 from scipy.spatial.distance import pdist
 from scipy.cluster.hierarchy import linkage, dendrogram, fcluster, cut_tree
 from sklearn.cluster import DBSCAN, Birch
-import matplotlib.cm as cm
 from sklearn.decomposition import PCA
 import sys
 sys.setrecursionlimit(100000)
@@ -233,7 +232,7 @@ def cluster_genomes_func(df, output_path, output_ending, cut_height_para, cluste
         import matplotlib.colors as mcolors
         import matplotlib.patches as mpatches
         unique_clusters = sorted(set(clustered_labels))
-        cmap = cm.get_cmap("tab20", len(unique_clusters))
+        cmap = plt.get_cmap("tab20", len(unique_clusters))
         cluster_to_color = {
             cl: mcolors.to_hex(cmap(i)) for i, cl in enumerate(unique_clusters)
         }
