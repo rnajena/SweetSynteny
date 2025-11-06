@@ -46,7 +46,6 @@ The pipeline is written in Nextflow. In order to run `SweetSynteny`, I recommend
     ```
 3. sugar
    ```
-   pip install dna_features_viewer
    pip install rnajena-sugar
    ```
 5. Clone the github repository for the latest version of `SweetSynteny`
