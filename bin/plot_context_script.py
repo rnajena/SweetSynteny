@@ -28,7 +28,7 @@ def setup_parser_func():
     parser.add_argument('--gene_of_interest', required=True, help='gene_of_interest')
     parser.add_argument('--gene_name', required=False, default='db', help='gene_of_interest')
     parser.add_argument('--name_file', required=False, help='Renaming contigs to genome names')
-    parser.add_argument('--gene_lable', required=False, choices=['yes', 'no'], help='Add lables to gene [no as default]')
+    parser.add_argument('--gene_lable', required=False, choices=['yes', 'no'], default='yes', help='Add lables to gene [yes as default]')
     parser.add_argument('--cut_height_args', type=float, default=0, help='Cut threshold for dendogram clustering.')
     parser.add_argument('--contig_cluster_file', required=False, help='Filter for Contigs your are interested in.')
     return parser
@@ -408,117 +408,135 @@ def dimensionreduction_visualize_pca(feature_matrix_color, output_path, folder, 
 
 def plot_cluster_func(cluster_df, output_path, output_ending, scale, gene_of_interest, gene_lable, folder, max_subplots=15):
     '''Generate plots for a cluster.'''
-    genome_groups = list(cluster_df.groupby('genome'))
-    num_subplots = int(np.ceil(len(genome_groups) / max_subplots))
-
-    for subplot_idx in range(num_subplots):
-        merged = {} # Merge all color dictionaries
-        subplot_genomes = genome_groups[
-            subplot_idx * max_subplots: (subplot_idx + 1) * max_subplots
+    # Hatches are working now. The best way to use them is by setting ft.meta._ftsviewer_hatch attribute.
+    # hatch_linewidth can be set in the same way starting with matplotlib 3.10
+    # color can be set in the same way or via colorby and color arguments of plot_ftsviewer
+    # needs sugar v1.0
+    name2color = {gene: color for gene, color in zip(cluster_df['gene'], cluster_df['cluster_color'])}
+    fts = FeatureList([
+        Feature(row.type, start=row.start, stop=row.end, strand=row.orientation,
+                meta={'seqid': row.contig, 'hit': row.genome, 'organism_name': row.organism_name, 'name': row.gene})
+                for row in cluster_df.itertuples(index=False)
+        ])
+    scale = scale.lower() == 'yes'
+    label = gene_lable.lower() == 'yes'
+    align = fts.select(name=gene_of_interest) if scale else None
+    fig = fts.plot_ftsviewer(
+        groupby='hit',
+        axlabel='seqid',
+        label='name' if label else None,
+        align=align, crop=500,
+        sharex=scale, xticks=False,
+        colorby='name', color=name2color,
+        figsize=(10, 1.5*len(fts.groupby('hit'))), ncols=1,
+        with_ruler=False,
+        labels_spacing=8, fontdict={'fontsize': 7}
+    )
+    if not label: # Add legend to the subplot
+        legend_handles = [
+            Patch(facecolor=color, label=label)
+            for label, color in name2color.items()
+            if isinstance(color, tuple) and len(color) == 3 and all(0 <= c <= 1 for c in color)
         ]
+        fig.legend(handles=legend_handles, title='Legend', bbox_to_anchor=(1.05, 1), loc='upper left')
+    count = f"{cluster_df['cluster_label'].iloc[0]}"
+    fig.savefig(f'{output_path}/{folder}/synteny_cluster_{count}.png', bbox_inches='tight')
+    fig.savefig(f'{output_path}/{folder}/synteny_cluster_{count}.svg', bbox_inches='tight')
+    plt.close(fig)
 
-        if not subplot_genomes:  # Added validation
-            continue
-
-        fig, axes = plt.subplots(len(subplot_genomes), 1, figsize=(12, len(subplot_genomes) * 1.2))
-        axes = [axes] if len(subplot_genomes) == 1 else axes
-
-        for i, (genome_name, genome_df) in enumerate(subplot_genomes):
-            dicts_subplot, df_subplot = plot_genome_func(genome_df, axes[i], scale, gene_of_interest, gene_lable)
-            merged.update(dicts_subplot)
-            unique_organisms_name = genome_df['organism_name'].unique().tolist()[0]
-            axes[i].set_title(unique_organisms_name, fontstyle='italic', loc='left')
-
-        if gene_lable=='no': # Add legend to the subplot
-            legend_handles = [
-                Patch(facecolor=color, label=label)
-                for label, color in merged.items()
-                if isinstance(color, tuple) and len(color) == 3 and all(0 <= c <= 1 for c in color)
-            ]
-            fig.legend(handles=legend_handles, title='Legend', bbox_to_anchor=(1.05, 1), loc='upper left')
-
-        # If further spacing needed:
-        plt.subplots_adjust(left=0.1, right=0.8, hspace=0.75)  # shrink plot area for
-
-        count = f"{cluster_df['cluster_label'].iloc[0]}.{subplot_idx}"
-        fig.savefig(f'{output_path}/{folder}/{count}.png', bbox_inches='tight')
-        fig.savefig(f'{output_path}/{folder}/{count}.svg', bbox_inches='tight')
-
-        plt.close(fig)
-
-def scale_genes(df, gene_name, target_length=50):
-    # Find the row with the specified gene
-    goi_row = df[df['gene'] == gene_name].iloc[0]
-
-    # Calculate the current length of the CrfA gene
-    crfa_length = goi_row['end'] - goi_row['start'] + 1
-
-    # Calculate scale factor
-    scale_factor = target_length / crfa_length
-    # Reference position is the minimum start to maintain relative distances
-    ref_start = df['start'].min()
-
-    # Function to calculate adjusted positions
-    def adjusted_positions(row):
-        original_length = row['end'] - row['start'] + 1
-        scaled_length = int(original_length * scale_factor)
-        scaled_start = int((row['start'] - ref_start) * scale_factor)
-        scaled_end = scaled_start + scaled_length - 1
-        return pd.Series({'adjusted_start': scaled_start, 'adjusted_end': scaled_end})
-
-    # Apply the function and assign new columns
-    df[['adjusted_start', 'adjusted_end']] = df.apply(adjusted_positions, axis=1)
-
-    return df
-
-def plot_genome_func(genome_df, ax, scale, gene_of_interest, gene_lable='no'):
-    '''Plot a single genome.'''
-
-    df = genome_df.sort_values(by=['start'])
-    df['organism_name'] = genome_df['organism_name']
-    min_start = df['start'].min()
-    df['start'] = df['start'].astype(int)
-    df['length'] = df['length'].astype(int)
-    min_start = int(df['start'].min())
-
-    if scale.lower() == 'yes':
-        df = scale_genes(df, gene_of_interest)
-        seqlen_distance = (df['adjusted_end'].max() - df['adjusted_start'].min()).astype(int)# Drop the original 'start' and 'end' columns
-
-    else:
-        max_distance = 0
-        df['adjusted_start'] = (df['start'] - min_start) / 1000
-        df['adjusted_end'] = (df['end'] - min_start) / 1000
-        min_start = genome_df['start'].min()
-        genome_locus_length = genome_df['end'].max() - min_start
-        max_distance = max(max_distance, genome_locus_length)
-        seqlen_distance = max_distance / 1000
-
-    features = [Feature(row.type, start=row.adjusted_start, stop=row.adjusted_end, strand=row.orientation,
-                        meta={'seqid': row.contig, 'organism_name': row.organism_name, 'name': row.gene, 'cluster_color': row.cluster_color})
-                for _, row in df.iterrows()]
-
-    color_dic = dict(zip(df['gene'], df['cluster_color']))
-    # New dictionaries to store cleaned colors and hatches
-    clean_color_dic = {}
-    hatch_dic = {}
-
-    for gene, color_hatch in color_dic.items():
-        if '_h_' in color_hatch:
-            # Split into color and hatch parts
-            color, hatch = color_hatch.split('_h_')
-            clean_color_dic[gene] = color
-            hatch_dic[gene] = hatch
-        else:
-            clean_color_dic[gene] = color_hatch  # just hex color, no hatch
-    FeatureList(features).plot_ftsviewer(
-        ax=ax, label=None if gene_lable=='no' else 'name',
-        colorby='name', color=clean_color_dic,
-        seqlen=seqlen_distance, figsize=(7, 5),
-        with_ruler=False, show=False,
-        labels_spacing=60, fontdict={'fontsize': 7})
-    # color dic for legend
-    return clean_color_dic, df
+# def old_plot_cluster_func(cluster_df, output_path, output_ending, scale, gene_of_interest, gene_lable, folder, max_subplots=15):
+#     genome_groups = list(cluster_df.groupby('genome'))
+#     num_subplots = int(np.ceil(len(genome_groups) / max_subplots))
+#     for subplot_idx in range(num_subplots):
+#         merged = {} # Merge all color dictionaries
+#         subplot_genomes = genome_groups[
+#             subplot_idx * max_subplots: (subplot_idx + 1) * max_subplots
+#         ]
+#         if not subplot_genomes:  # Added validation
+#             continue
+#         fig, axes = plt.subplots(len(subplot_genomes), 1, figsize=(12, len(subplot_genomes) * 1.2))
+#         axes = [axes] if len(subplot_genomes) == 1 else axes
+#         for i, (genome_name, genome_df) in enumerate(subplot_genomes):
+#             dicts_subplot, df_subplot = plot_genome_func(genome_df, axes[i], scale, gene_of_interest, gene_lable)
+#             merged.update(dicts_subplot)
+#             unique_organisms_name = genome_df['organism_name'].unique().tolist()[0]
+#             axes[i].set_title(unique_organisms_name, fontstyle='italic', loc='left')
+#         if gene_lable=='no': # Add legend to the subplot
+#             legend_handles = [
+#                 Patch(facecolor=color, label=label)
+#                 for label, color in merged.items()
+#                 if isinstance(color, tuple) and len(color) == 3 and all(0 <= c <= 1 for c in color)
+#             ]
+#             fig.legend(handles=legend_handles, title='Legend', bbox_to_anchor=(1.05, 1), loc='upper left')
+#         # If further spacing needed:
+#         plt.subplots_adjust(left=0.1, right=0.8, hspace=0.75)  # shrink plot area for
+#         count = f"{cluster_df['cluster_label'].iloc[0]}.{subplot_idx}"
+#         fig.savefig(f'{output_path}/{folder}/{count}.png', bbox_inches='tight')
+#         fig.savefig(f'{output_path}/{folder}/{count}.svg', bbox_inches='tight')
+#         plt.close(fig)
+#
+# def scale_genes(df, gene_name, target_length=50):
+#     # Find the row with the specified gene
+#     goi_row = df[df['gene'] == gene_name].iloc[0]
+#     # Calculate the current length of the CrfA gene
+#     crfa_length = goi_row['end'] - goi_row['start'] + 1
+#     # Calculate scale factor
+#     scale_factor = target_length / crfa_length
+#     # Reference position is the minimum start to maintain relative distances
+#     ref_start = df['start'].min()
+#     # Function to calculate adjusted positions
+#     def adjusted_positions(row):
+#         original_length = row['end'] - row['start'] + 1
+#         scaled_length = int(original_length * scale_factor)
+#         scaled_start = int((row['start'] - ref_start) * scale_factor)
+#         scaled_end = scaled_start + scaled_length - 1
+#         return pd.Series({'adjusted_start': scaled_start, 'adjusted_end': scaled_end})
+#     # Apply the function and assign new columns
+#     df[['adjusted_start', 'adjusted_end']] = df.apply(adjusted_positions, axis=1)
+#     return df
+#
+# def plot_genome_func(genome_df, ax, scale, gene_of_interest, gene_lable='no'):
+#     '''Plot a single genome.'''
+#     df = genome_df.sort_values(by=['start'])
+#     df['organism_name'] = genome_df['organism_name']
+#     min_start = df['start'].min()
+#     df['start'] = df['start'].astype(int)
+#     df['length'] = df['length'].astype(int)
+#     min_start = int(df['start'].min())
+#     if scale.lower() == 'yes':
+#         df = scale_genes(df, gene_of_interest)
+#         seqlen_distance = (df['adjusted_end'].max() - df['adjusted_start'].min()).astype(int)# Drop the original 'start' and 'end' columns
+#     else:
+#         max_distance = 0
+#         df['adjusted_start'] = (df['start'] - min_start) / 1000
+#         df['adjusted_end'] = (df['end'] - min_start) / 1000
+#         min_start = genome_df['start'].min()
+#         genome_locus_length = genome_df['end'].max() - min_start
+#         max_distance = max(max_distance, genome_locus_length)
+#         seqlen_distance = max_distance / 1000
+#     features = [Feature(row.type, start=row.adjusted_start, stop=row.adjusted_end, strand=row.orientation,
+#                         meta={'seqid': row.contig, 'organism_name': row.organism_name, 'name': row.gene, 'cluster_color': row.cluster_color})
+#                 for _, row in df.iterrows()]
+#     color_dic = dict(zip(df['gene'], df['cluster_color']))
+#     # New dictionaries to store cleaned colors and hatches
+#     clean_color_dic = {}
+#     hatch_dic = {}
+#     for gene, color_hatch in color_dic.items():
+#         if '_h_' in color_hatch:
+#             # Split into color and hatch parts
+#             color, hatch = color_hatch.split('_h_')
+#             clean_color_dic[gene] = color
+#             hatch_dic[gene] = hatch
+#         else:
+#             clean_color_dic[gene] = color_hatch  # just hex color, no hatch
+#     FeatureList(features).plot_ftsviewer(
+#         ax=ax, label=None if gene_lable=='no' else 'name',
+#         colorby='name', color=clean_color_dic,
+#         seqlen=seqlen_distance, figsize=(7, 5),
+#         with_ruler=False, show=False,
+#         labels_spacing=60, fontdict={'fontsize': 7})
+#     # color dic for legend
+#     return clean_color_dic, df
 
 def cosine_similarity(matrix):
     ''' Calculate norms of vectors & Scalar product matrix & External product norms and elementwise division -> Cosine similarity matrix '''
