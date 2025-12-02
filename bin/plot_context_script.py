@@ -77,7 +77,7 @@ def prepare_dataframe_func(input_file, gene_of_interest, gene_name, genome_name_
                         how='left')
         merged['organism_name'] = merged['organism_name'].astype(str) + ' (' + merged['contig'].astype(str) + ')'
         df = merged
-        organism_name_from_file = 'yes' 
+        organism_name_from_file = 'yes'
     else:
         df['organism_name'] = ''
         organism_name_from_file = 'no'
@@ -417,7 +417,7 @@ def plot_cluster_func(cluster_df, output_path, output_ending, scale, gene_of_int
     # color can be set in the same way or via colorby and color arguments of plot_ftsviewer
     # needs sugar v1.0
     name2color = {gene: color for gene, color in zip(cluster_df['gene'], cluster_df['cluster_color'])}
-    fts = FeatureList([
+    all_fts = FeatureList([
         Feature(row.type, start=row.start, stop=row.end, strand=row.orientation,
                 meta={'seqid': row.contig, 'hit': row.genome, 'organism_name': row.organism_name, 'name': row.gene})
                 for row in cluster_df.itertuples(index=False)
@@ -425,11 +425,15 @@ def plot_cluster_func(cluster_df, output_path, output_ending, scale, gene_of_int
 
     scale = scale.lower() == 'yes'
     label = gene_lable.lower() == 'yes'
-    align = fts.select(name=gene_of_interest) if scale else None
-    if organism_name_from_file == 'yes':
+    groups = list(all_fts.groupby('hit').values())
+    for fignum in range(0, 1 + (len(groups)-1)//max_subplots):
+        fts = FeatureList()
+        for g in groups[fignum * max_subplots:(fignum + 1) * max_subplots]:
+            fts.extend(g)
+        align = fts.select(name=gene_of_interest) if scale else None
         fig = fts.plot_ftsviewer(
             groupby='hit',
-            axlabel='organism_name',
+            axlabel='organism_name' if organism_name_from_file.lower() == 'yes' else 'seqid',
             label='name' if label else None,
             align=align, crop=500,
             sharex=scale, xticks=False,
@@ -438,55 +442,42 @@ def plot_cluster_func(cluster_df, output_path, output_ending, scale, gene_of_int
             with_ruler=False,
             labels_spacing=8, fontdict={'fontsize': 7}
         )
-    if organism_name_from_file == 'no':
-        fig = fts.plot_ftsviewer(
-            groupby='hit',
-            axlabel='seqid',
-            label='name' if label else None,
-            align=align, crop=500,
-            sharex=scale, xticks=False,
-            colorby='name', color=name2color,
-            figsize=(10, 1.5*len(fts.groupby('hit'))), ncols=1,
-            with_ruler=False,
-            labels_spacing=8, fontdict={'fontsize': 7}
-        )
+        if not label: # Add legend to the subplot
+            # Track which (color, name) combinations we've already seen
+            seen_combinations = set()
+            legend_handles = []
 
-    if not label: # Add legend to the subplot
-        # Track which (color, name) combinations we've already seen
-        seen_combinations = set()
-        legend_handles = []
+            for label, color in name2color.items():
+                # Create the unique combination as a tuple
+                combo = (color, label)
 
-        for label, color in name2color.items():
-            # Create the unique combination as a tuple
-            combo = (color, label)
-            
-            # Check if color is valid RGB and this exact (color+name) is new
-            if (isinstance(color, tuple) and 
-                len(color) == 3 and 
-                all(0 <= c <= 1 for c in color) and 
-                combo not in seen_combinations):
-                
-                # Mark this combination as seen
-                seen_combinations.add(combo)
-                
-                # Add to legend
-                patch = Patch(facecolor=color, label=label)
-                legend_handles.append(patch)
+                # Check if color is valid RGB and this exact (color+name) is new
+                if (isinstance(color, tuple) and
+                    len(color) == 3 and
+                    all(0 <= c <= 1 for c in color) and
+                    combo not in seen_combinations):
 
-        # Add legend outside the plot
-        fig.legend(handles=legend_handles, title='Legend', bbox_to_anchor=(1.05, 1), loc='upper left')
+                    # Mark this combination as seen
+                    seen_combinations.add(combo)
 
-        #legend_handles = [
-        #    Patch(facecolor=color, label=label)
-        #    for label, color in name2color.items()
-        #    if isinstance(color, tuple) and len(color) == 3 and all(0 <= c <= 1 for c in color)
-        #]
-        #fig.legend(handles=legend_handles, title='Legend', bbox_to_anchor=(1.05, 1), loc='upper left')
+                    # Add to legend
+                    patch = Patch(facecolor=color, label=label)
+                    legend_handles.append(patch)
 
-    count = f"{cluster_df['cluster_label'].iloc[0]}"
-    fig.savefig(f'{output_path}/{folder}/synteny_cluster_{count}.png', bbox_inches='tight')
-    fig.savefig(f'{output_path}/{folder}/synteny_cluster_{count}.svg', bbox_inches='tight')
-    plt.close(fig)
+            # Add legend outside the plot
+            fig.legend(handles=legend_handles, title='Legend', bbox_to_anchor=(1.05, 1), loc='upper left')
+
+            #legend_handles = [
+            #    Patch(facecolor=color, label=label)
+            #    for label, color in name2color.items()
+            #    if isinstance(color, tuple) and len(color) == 3 and all(0 <= c <= 1 for c in color)
+            #]
+            #fig.legend(handles=legend_handles, title='Legend', bbox_to_anchor=(1.05, 1), loc='upper left')
+
+        count = f"{cluster_df['cluster_label'].iloc[0]}"
+        fig.savefig(f'{output_path}/{folder}/synteny_cluster_{count}_{fignum:03d}.png', bbox_inches='tight')
+        fig.savefig(f'{output_path}/{folder}/synteny_cluster_{count}_{fignum:03d}.svg', bbox_inches='tight')
+        plt.close(fig)
 
 # def old_plot_cluster_func(cluster_df, output_path, output_ending, scale, gene_of_interest, gene_lable, folder, max_subplots=15):
 #     genome_groups = list(cluster_df.groupby('genome'))
