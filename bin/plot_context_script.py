@@ -69,15 +69,18 @@ def prepare_dataframe_func(input_file, gene_of_interest, gene_name, genome_name_
 
     if gene_name == 'id':
         df['gene'] = df['gene_id']
-
+    print(df)
     if genome_name_tsv:
         rename_df = pd.read_csv(genome_name_tsv, sep='\t')
         merged = df.merge(rename_df[['contig', 'organism_name']],
                         on='contig',
                         how='left')
+        merged['organism_name'] = merged['organism_name'].astype(str) + ' (' + merged['contig'].astype(str) + ')'
         df = merged
+        organism_name_from_file = 'yes' 
     else:
         df['organism_name'] = ''
+        organism_name_from_file = 'no'
 
     groups = df.groupby('genome')
     dfs = []
@@ -88,7 +91,7 @@ def prepare_dataframe_func(input_file, gene_of_interest, gene_name, genome_name_
 
     # Concatenate all the DataFrames into one
     big_df = pd.concat(dfs, ignore_index=True)
-    return big_df
+    return big_df, organism_name_from_file
 
 def cluster_genomes_func(df, output_path, output_ending, cut_height_para, cluster=2, threshold=0.1):
     '''Cluster genomes based on feature matrix.'''
@@ -406,7 +409,8 @@ def dimensionreduction_visualize_pca(feature_matrix_color, output_path, folder, 
 
     return full_clusters, clusters
 
-def plot_cluster_func(cluster_df, output_path, output_ending, scale, gene_of_interest, gene_lable, folder, max_subplots=15):
+def plot_cluster_func(cluster_df, output_path, output_ending, scale, gene_of_interest, gene_lable, folder, organism_name_from_file, max_subplots=15):
+
     '''Generate plots for a cluster.'''
     # Hatches are working now. The best way to use them is by setting ft.meta._ftsviewer_hatch attribute.
     # hatch_linewidth can be set in the same way starting with matplotlib 3.10
@@ -418,27 +422,67 @@ def plot_cluster_func(cluster_df, output_path, output_ending, scale, gene_of_int
                 meta={'seqid': row.contig, 'hit': row.genome, 'organism_name': row.organism_name, 'name': row.gene})
                 for row in cluster_df.itertuples(index=False)
         ])
+
     scale = scale.lower() == 'yes'
     label = gene_lable.lower() == 'yes'
     align = fts.select(name=gene_of_interest) if scale else None
-    fig = fts.plot_ftsviewer(
-        groupby='hit',
-        axlabel='seqid',
-        label='name' if label else None,
-        align=align, crop=500,
-        sharex=scale, xticks=False,
-        colorby='name', color=name2color,
-        figsize=(10, 1.5*len(fts.groupby('hit'))), ncols=1,
-        with_ruler=False,
-        labels_spacing=8, fontdict={'fontsize': 7}
-    )
+    if organism_name_from_file == 'yes':
+        fig = fts.plot_ftsviewer(
+            groupby='hit',
+            axlabel='organism_name',
+            label='name' if label else None,
+            align=align, crop=500,
+            sharex=scale, xticks=False,
+            colorby='name', color=name2color,
+            figsize=(10, 1.5*len(fts.groupby('hit'))), ncols=1,
+            with_ruler=False,
+            labels_spacing=8, fontdict={'fontsize': 7}
+        )
+    if organism_name_from_file == 'no':
+        fig = fts.plot_ftsviewer(
+            groupby='hit',
+            axlabel='seqid',
+            label='name' if label else None,
+            align=align, crop=500,
+            sharex=scale, xticks=False,
+            colorby='name', color=name2color,
+            figsize=(10, 1.5*len(fts.groupby('hit'))), ncols=1,
+            with_ruler=False,
+            labels_spacing=8, fontdict={'fontsize': 7}
+        )
+
     if not label: # Add legend to the subplot
-        legend_handles = [
-            Patch(facecolor=color, label=label)
-            for label, color in name2color.items()
-            if isinstance(color, tuple) and len(color) == 3 and all(0 <= c <= 1 for c in color)
-        ]
+        # Track which (color, name) combinations we've already seen
+        seen_combinations = set()
+        legend_handles = []
+
+        for label, color in name2color.items():
+            # Create the unique combination as a tuple
+            combo = (color, label)
+            
+            # Check if color is valid RGB and this exact (color+name) is new
+            if (isinstance(color, tuple) and 
+                len(color) == 3 and 
+                all(0 <= c <= 1 for c in color) and 
+                combo not in seen_combinations):
+                
+                # Mark this combination as seen
+                seen_combinations.add(combo)
+                
+                # Add to legend
+                patch = Patch(facecolor=color, label=label)
+                legend_handles.append(patch)
+
+        # Add legend outside the plot
         fig.legend(handles=legend_handles, title='Legend', bbox_to_anchor=(1.05, 1), loc='upper left')
+
+        #legend_handles = [
+        #    Patch(facecolor=color, label=label)
+        #    for label, color in name2color.items()
+        #    if isinstance(color, tuple) and len(color) == 3 and all(0 <= c <= 1 for c in color)
+        #]
+        #fig.legend(handles=legend_handles, title='Legend', bbox_to_anchor=(1.05, 1), loc='upper left')
+
     count = f"{cluster_df['cluster_label'].iloc[0]}"
     fig.savefig(f'{output_path}/{folder}/synteny_cluster_{count}.png', bbox_inches='tight')
     fig.savefig(f'{output_path}/{folder}/synteny_cluster_{count}.svg', bbox_inches='tight')
@@ -567,14 +611,15 @@ def main():
 
         #try:
         print("Read data")
-        df = prepare_dataframe_func(args.input_file, args.gene_of_interest, args.gene_name, args.name_file)
+        df, organism_name_from_file = prepare_dataframe_func(args.input_file, args.gene_of_interest, args.gene_name, args.name_file)
+        print(df)
         print("Process for clustering")
         dbscan_lables, ward_labels_cosinus, ward_labels_jaccard, feature_matrix_color = cluster_genomes_func(df, args.output_path, args.output_ending, args.cut_height_args, args.cluster, args.threshold)
         print("Finished clustering")
-        lst = ['dbscan', 'ward_cosinus', 'ward_jaccard'] # 'dice' 'birch' 'complete', 'average', 'single', 'centroid', 'weighted', 'kmeans', 'hdbscan',
+        lst = ['ward_cosinus', 'ward_jaccard', 'dbscan'] # 'dice' 'birch' 'complete', 'average', 'single', 'centroid', 'weighted', 'kmeans', 'hdbscan',
         i = 0
 
-        for labels in [dbscan_lables, ward_labels_cosinus, ward_labels_jaccard]: # , ward_labels_dice, birch_labels
+        for labels in [ward_labels_cosinus, ward_labels_jaccard, dbscan_lables]: # , ward_labels_dice, birch_labels
             print("Plots " + str(lst[i]))
             # correlation of cluster labels to each genome
             genome_to_cluster = pd.Series(labels, index=feature_matrix_color.index).groupby(level=0).first()
@@ -595,8 +640,7 @@ def main():
                     continue # Skip to the next cluster if no contigs from the list are found
 
                 write_labels(cluster_df, args.gene_of_interest, args.output_path, lst[i])
-                plot_cluster_func(cluster_df, args.output_path, args.output_ending, args.scale, args.gene_of_interest, args.gene_lable, lst[i])
-
+                plot_cluster_func(cluster_df, args.output_path, args.output_ending, args.scale, args.gene_of_interest, args.gene_lable, lst[i], organism_name_from_file)
                 cluster_size = cluster_df['genome'].nunique()
                 color_count = cluster_df['cluster_color'].nunique()
 
