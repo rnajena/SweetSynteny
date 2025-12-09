@@ -65,11 +65,11 @@ def prepare_dataframe_func(input_file, gene_of_interest, gene_name, genome_name_
     df['original_end'] = df['end']
 
     if gene_name == 'db':
-        df['gene'] = df['gene_db']
+        df['gene'] = df['gene_db'] # Name from Pfam or Rfam
 
     if gene_name == 'id':
         df['gene'] = df['gene_id']
-    print(df)
+
     if genome_name_tsv:
         rename_df = pd.read_csv(genome_name_tsv, sep='\t')
         merged = df.merge(rename_df[['contig', 'organism_name']],
@@ -93,7 +93,7 @@ def prepare_dataframe_func(input_file, gene_of_interest, gene_name, genome_name_
     big_df = pd.concat(dfs, ignore_index=True)
     return big_df, organism_name_from_file
 
-def cluster_genomes_func(df, output_path, output_ending, cut_height_para, cluster=2, threshold=0.1):
+def cluster_genomes_func(df, output_path, output_ending, cut_height_para, dbscan_cluster=2, dbscan_threshold=0.1):
     '''Cluster genomes based on feature matrix.'''
 
     unique_colors = df['cluster_color'].unique()
@@ -108,104 +108,139 @@ def cluster_genomes_func(df, output_path, output_ending, cut_height_para, cluste
 
     X = feature_matrix_color.values
 
-    def refine_clusters_by_distance(X_cluster, clustered_labels_series, refinement_cut_factor=0.5):
-        """Performs secondary, localized hierarchical clustering within each primary cluster
-        to refine assignments."""
+    # 1 Pre-assign cluster labels for simple cases AND dimension reduction
+    preassigned = {}
+    clustering_mask = []
+    for genome in feature_matrix_color.index:
+        row_sum = feature_matrix_color.loc[genome].sum()
+        if row_sum <= 2: 
+            preassigned[genome] = -1 if row_sum == 2 else -2
+            clustering_mask.append(False)
+        else:
+            clustering_mask.append(True)
+    
+    clustering_mask = np.array(clustering_mask)
+    X_cluster = X[clustering_mask]
 
-        # Ensure X_cluster is a DataFrame for robust index access
-        if not isinstance(X_cluster, pd.DataFrame):
-            X_cluster = pd.DataFrame(X_cluster, index=clustered_labels_series.index)
+    pca = PCA(n_components=2)
+    reduced_PCA = pca.fit_transform(X_cluster)
+    full_clusters = np.empty(len(feature_matrix_color), dtype=int)
+    full_clusters[:] = -99  # default placeholder
 
-        unique_primary_clusters = sorted(clustered_labels_series.unique())
-        current_max_label = clustered_labels_series.max()
-        new_labels = clustered_labels_series.copy()
+    # Fill preassigned
+    preassigned_indices = np.where(~clustering_mask)[0]
+    for idx in preassigned_indices:
+        genome = feature_matrix_color.index[idx]
+        full_clusters[idx] = preassigned[genome]
 
-        for cluster_id in unique_primary_clusters:
-            # 1. Isolate the data for the current primary cluster
-            cluster_indices = clustered_labels_series[clustered_labels_series == cluster_id].index
-            X_sub = X_cluster.loc[cluster_indices]
+    clustered_indices = np.where(clustering_mask)
+    
+    def pca_vis(full_clusters, clustered_indices, clusters, output_path, folder, title):
+        full_clusters[clustered_indices] = clusters
 
-            # Only recluster if there are enough points
-            if len(X_sub) <= 2:
-                continue
+        plt.figure(figsize=(8, 6))
+        scatter = plt.scatter(reduced_PCA[:, 0], reduced_PCA[:, 1], c=clusters, cmap='tab20')
+        unique_clusters, counts = np.unique(clusters, return_counts=True)
+        cmap = plt.get_cmap('tab20', len(unique_clusters))
+        legend_handles = [
+            Patch(color=cmap(i), label=f'Cluster {cluster_label} ({count} points)')
+            for i, (cluster_label, count) in enumerate(zip(unique_clusters, counts))
+        ]
+        plt.legend(handles=legend_handles, title='Clusters', bbox_to_anchor=(1.05, 1), loc='upper left')
+        variance_1 = pca.explained_variance_ratio_[0] * 100
+        variance_2 = pca.explained_variance_ratio_[1] * 100
 
-            try:
-                # 2. Perform new, localized hierarchical clustering
-                # Use .values to explicitly pass a NumPy array to pdist
-                matrix_sub = pdist(X_sub.values, metric='euclidean')
-                clustering_sub = linkage(matrix_sub, method='average') # Assuming the same method
+        plt.xlabel(f'PC 1 ({variance_1:.2f}% variance)')
+        plt.ylabel(f'PC 2 ({variance_2:.2f}% variance)')
+        plt.title(title)
+        plt.tight_layout()
+        os.makedirs(f'{output_path}/{folder}', exist_ok=True)
+        plt.savefig(f'{output_path}/{folder}/PCA.REDUCED.{folder}.png')
+        plt.savefig(f'{output_path}/{folder}/PCA.REDUCED.{folder}.svg')
+        plt.close()
 
-                # 3. Calculate a local cut height
-                max_local_dist = max(clustering_sub[:, 2]) if clustering_sub.size > 0 else 0
+    # 2 Clustering
+    def density_clustering(eps, min_samples, reduced_PCA, folder):
 
-                # Apply cut only if there is structure to cut
-                if max_local_dist > 0.001:
-                    local_cut_height = refinement_cut_factor * max_local_dist
+        dbscan = DBSCAN(eps=eps, min_samples=min_samples)
+        clusters = dbscan.fit_predict(reduced_PCA)
 
-                    # 4. Find new sub-cluster labels
-                    local_sub_labels = fcluster(clustering_sub, t=local_cut_height, criterion="distance")
-                    local_sub_labels_series = pd.Series(local_sub_labels, index=X_sub.index)
+        clustered_indices = np.where(clustering_mask)
+        full_clusters[clustered_indices] = clusters
 
-                    # Check if refinement actually created sub-clusters
-                    num_sub_clusters = local_sub_labels_series.max()
+        title = f'{folder} with eps={eps}, min_samples={min_samples} on PCA-reduced Data (n={len(X_cluster)})'
+        pca_vis(full_clusters, clustered_indices, clusters, output_path, folder, title)
 
-                    if num_sub_clusters > 1:
-                        # 5. Relabel sub-clusters with globally unique IDs
+        dbscan_labels_series = pd.Series(full_clusters, index=feature_matrix_color.index)
+        dbscan = dbscan_labels_series.values
+        return dbscan
 
-                        # The first sub-cluster keeps the original ID, others get new IDs
-                        new_sub_cluster_labels = local_sub_labels_series.copy()
+    dbscan_result = density_clustering(dbscan_threshold, dbscan_cluster, reduced_PCA, 'dbscan')
 
-                        for sub_label in range(2, num_sub_clusters + 1):
-                            current_max_label += 1
-                            # Assign new global ID to the sub-cluster
-                            new_sub_cluster_labels[local_sub_labels_series == sub_label] = current_max_label
-
-                        # Update the global label series
-                        new_labels.loc[cluster_indices] = new_sub_cluster_labels
-                        print(f"  -> Split into {num_sub_clusters} sub-clusters. New global max ID: {current_max_label}")
-                    else:
-                        print("  -> No significant sub-structure found for refinement.")
-
-                else:
-                    print("  -> Trivial cluster structure (max internal distance is zero).")
-
-            except ValueError as e:
-                # Catch cases where linkage fails on very small or identical subsets
-                print(f"  -> Could not recluster (Error: {e}). Skipping.")
-                continue
-
-        print("--- Refinement Complete ---")
-        return new_labels
-
-    def create_dendrogram_with_preassign(
-        X, feature_matrix_color, metric, method, name, output_path, cut_height_para=0.25, filter_row_sum_1=True
+    def hierarchical_clustering(reduced_PCA, feature_matrix_color, metric, method, folder, output_path, cut_height_para=0.25, filter_row_sum_1=True
         ):
-        # 1 Pre-assign cluster labels for simple cases
-        preassigned = {}
-        clustering_mask = []
+        import matplotlib.colors as mcolors
+        import matplotlib.patches as mpatches
 
-        for genome in feature_matrix_color.index:
-            row_sum = feature_matrix_color.loc[genome].sum()
-            if filter_row_sum_1 and row_sum == 1:
-                preassigned[genome] = -2
-                clustering_mask.append(False)
-            elif filter_row_sum_1 and row_sum == 2:
-                preassigned[genome] = -1
-                clustering_mask.append(False)
-            else:
-                clustering_mask.append(True)
-        clustering_mask = np.array(clustering_mask)
-        X_cluster = X[clustering_mask]
+        def dendogram_vis(linkage_result, all_labels, title, cut_height, clustered_labels_series, cluster_to_color):
+
+            # Node color
+            def link_color_func(node_id):
+                # leaf node
+                if node_id < len(X_cluster):
+                    genome_id = feature_matrix_color.index[clustering_mask][node_id]
+                    cluster_id = clustered_labels_series[genome_id]
+                    return cluster_to_color[cluster_id]
+                else:
+                    # Internal node
+                    dist = linkage_result[node_id - len(X_cluster), 2]
+                    if dist < cut_height:
+                        left_child = int(linkage_result[node_id - len(X_cluster), 0])
+                        return link_color_func(left_child)
+                    else:
+                        return "grey"
+                        
+            plt.figure(figsize=(10, 5))
+            dendrogram(
+                linkage_result,
+                color_threshold=None,   # disable default coloring
+                link_color_func=link_color_func,
+                leaf_rotation=90,
+                no_labels=True
+            )
+
+            cluster_counts = Counter(all_labels)
+            # Create legend handles with cluster IDs and colors
+            legend_handles = []
+            for cluster_id, color in cluster_to_color.items():
+                count = cluster_counts.get(cluster_id, 0)
+                if cluster_id < 0:
+                    label = f"Preassigned {cluster_id}"
+                else:
+                    label = f"Cluster {cluster_id} ({count} leaves)"
+                patch = mpatches.Patch(color=color, label=label)
+                legend_handles.append(patch)
+
+            # Add legend to the plot (place it outside right of the figure)
+            plt.legend(handles=legend_handles, title="Clusters", bbox_to_anchor=(1.05, 1), loc="upper left")
+            plt.title(title)
+            plt.xlabel("Genomes")
+            plt.ylabel("Distance")
+            plt.tight_layout(rect=[0, 0, 0.85, 1])
+            os.makedirs(f'{output_path}/{folder.replace("_clustering", "")}', exist_ok=True)
+            plt.savefig(f'{output_path}/{folder.replace("_clustering", "")}/Tree.{folder}.svg')
+            plt.savefig(f'{output_path}/{folder.replace("_clustering", "")}/Tree.{folder}.png')
+            plt.close()
 
         # 2 Primary hierarchical clustering
-        matrix = pdist(X_cluster, metric=metric)
-        clustering = linkage(matrix, method=method)
+        dist_matrix = pdist(reduced_PCA, metric=metric)
+        linkage_result = linkage(dist_matrix, method=method)
 
-        max_dist = max(clustering[:, 2]) if clustering.size > 0 else 0
-        cut_height = cut_height_para * max(clustering[:, 2])
+        max_dist = max(linkage_result[:, 2]) if linkage_result.size > 0 else 0
+        cut_height = cut_height_para * max(linkage_result[:, 2])
 
         # 3 Cluster assignments
-        clustered_labels = fcluster(clustering, t=cut_height, criterion="distance")
+        clustered_labels = fcluster(linkage_result, t=cut_height, criterion="distance")
 
         if filter_row_sum_1:
             clustered_labels_series = pd.Series(
@@ -217,11 +252,6 @@ def cluster_genomes_func(df, output_path, output_ending, cut_height_para, cluste
                 clustered_labels, index=feature_matrix_color.index
             )
 
-        # Apply secondary clustering within primary cluster
-        refined_labels_series = refine_clusters_by_distance(
-            X_cluster, clustered_labels_series, refinement_cut_factor=0.5
-        )
-
         # Re-integrate pre-assigned and clustered labels
         all_labels = pd.Series(index=feature_matrix_color.index, dtype=int)
         for genome in feature_matrix_color.index:
@@ -232,182 +262,41 @@ def cluster_genomes_func(df, output_path, output_ending, cut_height_para, cluste
         all_labels = all_labels.astype(int)
 
         # 4 Assign unique colors to clusters
-        import matplotlib.colors as mcolors
-        import matplotlib.patches as mpatches
         unique_clusters = sorted(set(clustered_labels))
         cmap = plt.get_cmap("tab20", len(unique_clusters))
         cluster_to_color = {
             cl: mcolors.to_hex(cmap(i)) for i, cl in enumerate(unique_clusters)
         }
 
-        # 5 Node color
-        def link_color_func(node_id):
-            # leaf node
-            if node_id < len(X_cluster):
-                genome_id = feature_matrix_color.index[clustering_mask][node_id]
-                cluster_id = clustered_labels_series[genome_id]
-                return cluster_to_color[cluster_id]
-            else:
-                # Internal node
-                dist = clustering[node_id - len(X_cluster), 2]
-                if dist < cut_height:
-                    left_child = int(clustering[node_id - len(X_cluster), 0])
-                    return link_color_func(left_child)
-                else:
-                    return "grey"
 
-        # 6 Plot dendrogram
-        plt.figure(figsize=(10, 5))
-        dendrogram(
-            clustering,
-            color_threshold=None,   # disable default coloring
-            link_color_func=link_color_func,
-            leaf_rotation=90,
-            no_labels=True
-        )
+        # 5 Plot dendrogram and pca
+        title = f'{folder} with cut_height={cut_height_para} on PCA-reduced Data (n={len(X_cluster)})'
+        dendogram_vis(linkage_result, all_labels, title, cut_height, clustered_labels_series, cluster_to_color)
+        pca_vis(full_clusters, clustered_indices, clustered_labels, output_path, folder, title)
 
-        cluster_counts = Counter(all_labels)
-        # Create legend handles with cluster IDs and colors
-        legend_handles = []
-        for cluster_id, color in cluster_to_color.items():
-            count = cluster_counts.get(cluster_id, 0)
-            if cluster_id < 0:
-                label = f"Preassigned {cluster_id}"
-            else:
-                label = f"Cluster {cluster_id} ({count} leaves)"
-            patch = mpatches.Patch(color=color, label=label)
-            legend_handles.append(patch)
+        return all_labels
 
-        # Add legend to the plot (place it outside right of the figure)
-        plt.legend(handles=legend_handles, title="Clusters", bbox_to_anchor=(1.05, 1), loc="upper left")
-
-        plt.title(name)
-        plt.xlabel("Genomes")
-        plt.ylabel("Distance")
-        plt.tight_layout(rect=[0, 0, 0.85, 1])
-        os.makedirs(f'{output_path}/{name.replace("_clustering", "")}', exist_ok=True)
-        plt.savefig(f'{output_path}/{name.replace("_clustering", "")}/Tree.{name}.svg')
-        plt.savefig(f'{output_path}/{name.replace("_clustering", "")}/Tree.{name}.png')
-        plt.close()
-
-        return clustering, cut_height, all_labels
-
-    def non_or_one_color(cluster_labels, feature_matrix_color):
-        for genome in feature_matrix_color.index:
-            if feature_matrix_color.loc[genome].sum() == 1:
-                cluster_labels[genome] = -1
-            if feature_matrix_color.loc[genome].sum() == 0:
-                cluster_labels[genome] = -2
-        return cluster_labels.values
-
-    def cluster_label(clustering, cut_height):
-        # Assign clusters based on the chosen height
-        fcluster_result = fcluster(clustering, t=cut_height, criterion='distance')
-        cluster_labels_series = pd.Series(fcluster_result, index=feature_matrix_color.index)
-        cluster_labels_values = non_or_one_color(cluster_labels_series, feature_matrix_color)
-
-        return cluster_labels_values
-
-    dbscan_labels_reduced, _ = dimensionreduction_visualize_pca(feature_matrix_color, output_path, 'dbscan', cluster, threshold)
-    dbscan_labels_series = pd.Series(dbscan_labels_reduced, index=feature_matrix_color.index)
-    dbscan = dbscan_labels_series.values
-    #----------------------
-
-    # Birch clustering (Balanced Iterative Reducing and Clustering using Hierarchies)
-    #birch_labels_reduced, _ = dimensionreduction_visualize_pca(feature_matrix_color, output_path, 'birch', cluster, threshold)
-    #birch_labels_series = pd.Series(birch_labels_reduced, index=feature_matrix_color.index)
-    #birch = birch_labels_series.values
-    #----------------------
-
-    ward_clustering_cosinus, ward_cut_height_cosinus, ward_cosinus = create_dendrogram_with_preassign(
-        X,                       # full feature matrix used for clustering
+    ward_cosinus_result = hierarchical_clustering(
+        reduced_PCA,             # dimension reduced matrix used for clustering
         feature_matrix_color,    # dataframe with your "colors"
         metric="cosine",         # cosine similarity distance
         method="ward",
-        name="ward_cosinus_clustering",
+        folder="ward_cosinus",
         output_path=output_path,
         cut_height_para=cut_height_para
     )
 
-    ward_clustering_jaccard, ward_cut_height_jaccard, ward_jaccard = create_dendrogram_with_preassign(
-        X,
+    ward_jaccard_result = hierarchical_clustering(
+        reduced_PCA,
         feature_matrix_color,
         metric="jaccard",
         method="ward",
-        name="ward_jaccard_clustering",
+        folder="ward_jaccard",
         output_path=output_path,
         cut_height_para=cut_height_para
     )
 
-    return dbscan, ward_cosinus, ward_jaccard, feature_matrix_color # ward_dice, birch,
-
-def dimensionreduction_visualize_pca(feature_matrix_color, output_path, folder, cluster=2, threshold=0.2):
-    # Reduce data to 2D for plotting # Cluster the Reduced Data
-    X = feature_matrix_color.values
-
-    preassigned = {}  # genome -> cluster id
-    clustering_mask = []  # keep track of which rows go into clustering
-    for genome in feature_matrix_color.index:
-        row_sum = feature_matrix_color.loc[genome].sum()
-        if row_sum == 1: # White is a color = no color
-            preassigned[genome] = -2
-            clustering_mask.append(False)
-        elif row_sum == 2:
-            preassigned[genome] = -1   # only one color
-            clustering_mask.append(False)
-        else:
-            clustering_mask.append(True)
-
-    clustering_mask = np.array(clustering_mask)
-    X_cluster = X[clustering_mask]
-
-    pca = PCA(n_components=2)
-    reduced_PCA = pca.fit_transform(X_cluster)
-
-    if folder == 'dbscan':
-        dbscan = DBSCAN(eps=threshold, min_samples=cluster)
-        clusters = dbscan.fit_predict(reduced_PCA)
-
-    #if folder == 'birch':
-    #    birch = Birch(n_clusters=None)
-    #    clusters = birch.fit_predict(reduced_PCA)
-
-    # Now merge preassigned clusters into full cluster array
-    full_clusters = np.empty(len(feature_matrix_color), dtype=int)
-    full_clusters[:] = -99  # default placeholder
-
-    # Fill preassigned
-    preassigned_indices = np.where(~clustering_mask)[0]
-    for idx in preassigned_indices:
-        genome = feature_matrix_color.index[idx]
-        full_clusters[idx] = preassigned[genome]
-
-    # Fill newly assigned clusters
-    clustered_indices = np.where(clustering_mask)
-    full_clusters[clustered_indices] = clusters
-
-    plt.figure(figsize=(8, 6))
-    scatter = plt.scatter(reduced_PCA[:, 0], reduced_PCA[:, 1], c=clusters, cmap='tab20')
-    unique_clusters, counts = np.unique(clusters, return_counts=True)
-    cmap = plt.get_cmap('tab20', len(unique_clusters))
-    legend_handles = [
-        Patch(color=cmap(i), label=f'Cluster {cluster_label} ({count} points)')
-        for i, (cluster_label, count) in enumerate(zip(unique_clusters, counts))
-    ]
-    plt.legend(handles=legend_handles, title='Clusters', bbox_to_anchor=(1.05, 1), loc='upper left')
-    variance_1 = pca.explained_variance_ratio_[0] * 100
-    variance_2 = pca.explained_variance_ratio_[1] * 100
-
-    plt.xlabel(f'PC 1 ({variance_1:.2f}% variance)')
-    plt.ylabel(f'PC 2 ({variance_2:.2f}% variance)')
-    plt.title('Clustering on PCA-reduced data')
-    plt.tight_layout()
-    os.makedirs(f'{output_path}/{folder}', exist_ok=True)
-    plt.savefig(f'{output_path}/{folder}/PCA.REDUCED.{folder}.png')
-    plt.savefig(f'{output_path}/{folder}/PCA.REDUCED.{folder}.svg')
-    plt.close()
-
-    return full_clusters, clusters
+    return dbscan_result, ward_cosinus_result, ward_jaccard_result, feature_matrix_color
 
 def plot_cluster_func(cluster_df, output_path, output_ending, scale, gene_of_interest, gene_lable, folder, organism_name_from_file, max_subplots=15):
 
