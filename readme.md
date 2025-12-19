@@ -83,9 +83,11 @@ Let us briefly go over the most important parameters and options.
         .    └── db.fna
     ...
 
+<samp>annotation_type .gff | other_types_for_futur </samp>
+
 <samp>query .cm | .fna </samp>
 
-- Path to CM or FASTA of the gen of interest
+- Path to CM or FASTA of the gene of interest
 
 <samp>output_dir FOLDER </samp>
 
@@ -97,7 +99,7 @@ Let us briefly go over the most important parameters and options.
 
 <samp>cluster_level sequence_level | structur_level </samp>
 
-- Chose clustering for sRNAs
+- Chose clustering
 
 <samp>neighbours x:y | x-y </samp>
 
@@ -108,10 +110,6 @@ Let us briefly go over the most important parameters and options.
 
 - Chose if you want to scale the microsynteny plots
 
-<samp>plotting png | svg </samp>
-
-- Select which output format you prefer for the microsynteny plots
-
 <samp>cluster >2 </samp>
 
 - Chose minimal cluster size for `DBscan` clustering
@@ -120,16 +118,25 @@ Let us briefly go over the most important parameters and options.
 
 - Select a similarity threshold for clustering
 
+<samp>pfam_db : /path/to/result/folder/Pfam-A.hmm</samp>
+
+<samp>rfam_db : /path/to/result/folder/Rfam.cm</samp>
+
+<samp>name_file" : ""</samp>
+
 ### Use a config file.
 
 See example `para.json`
 
 ### Running the pipeline
-`nextflow run SweetSynteny.nf -params-file /SweetSynteny/para.json`
+`nextflow run SweetSynteny.nf -params-file /SweetSynteny/para.json -c nextflow.config`
 
 ### Other tools
 <details><summary>Click here for all citations</summary>
-    
+
+  * SUGAR:
+    * `Eulenfeld, Tom. "Sugar: A Python framework for bioinformatics." Journal of Open Source Software 10.111 (2025): 8122.`
+
   * BLAST:
     * `Korf, Ian, Mark Yandell, and Joseph Bedell. Blast. " O'Reilly Media, Inc.", 2003.`
       

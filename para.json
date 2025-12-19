@@ -1,7 +1,7 @@
 {
     "types" : "infernal",
     "genomes_dir": "/path/to/genome/folders/",
-    "annotation_type": ".gbk",
+    "annotation_type": ".gff",
     "query": "/path/to/file.cm",
     "output_dir" : "/path/to/result/folder/",
     "gene_of_interest": "name_of_gene_of_interest",
@@ -10,5 +10,8 @@
     "scale" : "no",
     "plotting" : "png",
     "cluster" : 2,
-    "threshold" :0.3
+    "threshold" :0.3,
+    "pfam_db" : "/path/to/result/folder/Pfam-A.hmm",
+    "rfam_db" : "/path/to/result/folder/Rfam.cm",
+    "name_file" : ""
   }
