@@ -20,6 +20,7 @@ FEATURE_TO_OUTPUT_TYPE = {
     'ncRNA': 'srna',
     'infernal': 'srna',
     'misc_RNA': 'srna',
+    'RNase_P_RNA': 'srna',
 }
 
 BLAST_FMT = 'qseqid sseqid bitscore evalue pident length mismatch gapopen qstart qend qlen sstart send sstrand slen qseq sseq'
@@ -330,7 +331,7 @@ def write_neighbour_data(feature, entry, output_path, seqs, input_type, gene_of_
     bio_type = entry.strip().split('\t')[-1]
 
     # Write annotation entry to TSV
-    with open(base_path.with_suffix('.tsv'), 'a') as tsv_file:
+    with open(str(base_path) + ".tsv", 'a') as tsv_file:
         tsv_file.write(entry + "\n")
 
     output_type = FEATURE_TO_OUTPUT_TYPE.get(bio_type)
@@ -338,7 +339,7 @@ def write_neighbour_data(feature, entry, output_path, seqs, input_type, gene_of_
     if output_type and output_type in OUTPUT_FILES:
         suffix, should_translate = OUTPUT_FILES[output_type]
         # Creat outputpath
-        output_file_path = base_path.with_suffix(suffix)
+        output_file_path = str(base_path) + suffix
         
         with open(output_file_path, 'a') as out_file:
             out_file.write(header)
@@ -354,7 +355,6 @@ def extract_and_save_promoter_regions(args, feature, seq, entry):
     """ Extract promoter regions for the gene of interest and write them to a new mfna file. """
     # 1. Define file path
     output_path = Path(args.output_path)
-    output_file = output_path.with_suffix('.promoter.mfna')
 
     # 2. Determine promoter coordinates
     promoter_start = max(0, feature.loc.start - args.promoter_len)
@@ -368,7 +368,7 @@ def extract_and_save_promoter_regions(args, feature, seq, entry):
         promoter_seq = promoter_seq.reverse().complement()
 
     # 4. Write data to file
-    with open(output_file, 'a') as mfna_file:
+    with open(output_file + '.promoter.mfna', 'a') as mfna_file:
         mfna_file.write(promoter_header)
         mfna_file.write(str(promoter_seq) + '\n')
 
@@ -406,7 +406,7 @@ def main():
         # Since no hits need to be processed, the analysis is started directly with the GFF features.
         process_neighborhood(args, gff_features, seqs)
     
-    print("\n✅ Done!")
+    print("\n Done!")
 
 if __name__ == '__main__':
     main()

@@ -8,13 +8,14 @@ from matplotlib.patches import Patch
 from sugar import Feature, FeatureList
 from scipy.spatial.distance import pdist
 from scipy.cluster.hierarchy import linkage, dendrogram, fcluster, cut_tree
+from scipy.stats import pearsonr
 from sklearn.cluster import DBSCAN, Birch
 from sklearn.decomposition import PCA
 import sys
 sys.setrecursionlimit(100000)
 from collections import Counter
 from sklearn.metrics.pairwise import cosine_similarity
-
+import seaborn as sns
 
 def setup_parser_func():
     '''Set up and return the argument parser.'''
@@ -22,7 +23,6 @@ def setup_parser_func():
     parser.add_argument('--scale', required=True, choices=['yes', 'no'], help='Nucleotide Scale')
     parser.add_argument('--input_file', required=True, help='Path to input file')
     parser.add_argument('--output_path', required=True, help='Path to final png or svg')
-    parser.add_argument('--output_ending', required=True, choices=['png', 'svg'], help='Final plot format')
     parser.add_argument('--cluster', type=int, default=2, help='Minimal size for a cluster')
     parser.add_argument('--threshold', type=float, default=0.9, help='Similarity threshold for clustering')
     parser.add_argument('--gene_of_interest', required=True, help='gene_of_interest')
@@ -31,6 +31,7 @@ def setup_parser_func():
     parser.add_argument('--gene_lable', required=False, choices=['yes', 'no'], default='yes', help='Add lables to gene [yes as default]')
     parser.add_argument('--cut_height_args', type=float, default=0, help='Cut threshold for dendogram clustering.')
     parser.add_argument('--contig_cluster_file', required=False, help='Filter for Contigs your are interested in.')
+    parser.add_argument('--microsynteny_logo', required=False, choices=['yes', 'no'], default='no', help='Filter for Contigs your are interested in.')
     return parser
 
 def map_ori_func(value):
@@ -93,7 +94,7 @@ def prepare_dataframe_func(input_file, gene_of_interest, gene_name, genome_name_
     big_df = pd.concat(dfs, ignore_index=True)
     return big_df, organism_name_from_file
 
-def cluster_genomes_func(df, output_path, output_ending, cut_height_para, dbscan_cluster=2, dbscan_threshold=0.1):
+def cluster_genomes_func(df, output_path, cut_height_para, dbscan_size=2, dbscan_threshold=0.1):
     '''Cluster genomes based on feature matrix.'''
 
     unique_colors = df['cluster_color'].unique()
@@ -106,11 +107,12 @@ def cluster_genomes_func(df, output_path, output_ending, cut_height_para, dbscan
     # Create a mapping from genome to organism_name and get the organism names in the same order as feature_matrix_color.index
     genome_to_organism = df.set_index('genome')['organism_name'].to_dict()
 
-    X = feature_matrix_color.values
+    X = feature_matrix_color.values.copy()
 
     # 1 Pre-assign cluster labels for simple cases AND dimension reduction
     preassigned = {}
     clustering_mask = []
+
     for genome in feature_matrix_color.index:
         row_sum = feature_matrix_color.loc[genome].sum()
         if row_sum <= 2: 
@@ -119,9 +121,61 @@ def cluster_genomes_func(df, output_path, output_ending, cut_height_para, dbscan
         else:
             clustering_mask.append(True)
     
+    def test_suitablty_for_pca(X):
+
+        first_df = pd.DataFrame(X)
+        # 1. Finde alle Spalten, die nur einen einzigen eindeutigen Wert enthalten
+        constant_cols = [col for col in first_df.columns if first_df[col].nunique() <= 1]
+        df = first_df.drop(columns=constant_cols)
+
+        # Pearson-Korrelationsmatrix
+        correlation_matrix = df.corr(method='pearson')
+
+        plt.figure(figsize=(8, 6))
+        sns.heatmap(
+            correlation_matrix,
+            annot=False,
+            cmap='coolwarm',
+            linewidths=.5,
+            cbar_kws={'label': 'Pearson Korrelationskoeffizient'}
+        )
+        plt.title('Korrelations-Heatmap')
+        plt.savefig('/data/fass5/projects/ProjectFroehlich/result_crfA/Korrelations_Heatmap.png')
+
+        df_cols = df.columns
+        p_values_matrix = np.zeros((len(df_cols), len(df_cols)))
+
+        for i in range(len(df_cols)):
+            for j in range(len(df_cols)):
+                # Die Korrelation einer Variable mit sich selbst ist 1, P-Wert ist nicht anwendbar
+                if i == j:
+                    p_values_matrix[i, j] = 0.0
+                    continue
+
+                # pearsonr gibt (r, p-value) 
+                r, p_value = pearsonr(df[df_cols[i]], df[df_cols[j]])
+                p_values_matrix[i, j] = p_value
+
+        p_values_df = pd.DataFrame(p_values_matrix, index=df_cols, columns=df_cols)
+
+        plt.figure(figsize=(8, 6))
+        sns.heatmap(
+            p_values_df,
+            annot=False,
+            cmap='viridis_r',        # Dark color = low p (signifikant)
+            vmax=0.05,               # Alle Werte > 0.05 sind blass
+            linewidths=.5,
+            cbar_kws={'label': 'P-Wert (Signifikanzniveau)', 'ticks': [0.0, 0.01, 0.02, 0.03, 0.04, 0.05]}
+        )
+        plt.title('P-value')
+        plt.savefig('/data/fass5/projects/ProjectFroehlich/result_crfA/p_value.png')
+
+
+
     clustering_mask = np.array(clustering_mask)
     X_cluster = X[clustering_mask]
-
+    test_suitablty_for_pca(X_cluster)
+    # Dimension reduction
     pca = PCA(n_components=2)
     reduced_PCA = pca.fit_transform(X_cluster)
     full_clusters = np.empty(len(feature_matrix_color), dtype=int)
@@ -160,28 +214,27 @@ def cluster_genomes_func(df, output_path, output_ending, cut_height_para, dbscan
         plt.close()
 
     # 2 Clustering
-    def density_clustering(eps, min_samples, reduced_PCA, folder):
+    def density_clustering(eps, min_samples, reduced_PCA, pca_clusters, folder):
 
         dbscan = DBSCAN(eps=eps, min_samples=min_samples)
-        clusters = dbscan.fit_predict(reduced_PCA)
+        dbscan_clusters = dbscan.fit_predict(reduced_PCA)
 
         clustered_indices = np.where(clustering_mask)
-        full_clusters[clustered_indices] = clusters
+        pca_clusters[clustered_indices] = dbscan_clusters
 
         title = f'{folder} with eps={eps}, min_samples={min_samples} on PCA-reduced Data (n={len(X_cluster)})'
-        pca_vis(full_clusters, clustered_indices, clusters, output_path, folder, title)
+        pca_vis(pca_clusters, clustered_indices, dbscan_clusters, output_path, folder, title)
 
-        dbscan_labels_series = pd.Series(full_clusters, index=feature_matrix_color.index)
-        dbscan = dbscan_labels_series.values
+        dbscan_labels_series = pd.Series(pca_clusters, index=feature_matrix_color.index)
+        dbscan = dbscan_labels_series.values.copy()
         return dbscan
 
-    dbscan_result = density_clustering(dbscan_threshold, dbscan_cluster, reduced_PCA, 'dbscan')
+    dbscan_result = density_clustering(dbscan_threshold, dbscan_size, reduced_PCA, full_clusters, 'dbscan')
 
-    def hierarchical_clustering(reduced_PCA, feature_matrix_color, metric, method, folder, output_path, cut_height_para=0.25, filter_row_sum_1=True
-        ):
+    def hierarchical_clustering(reduced_PCA, feature_matrix_color, pca_clusters, metric, method, folder, output_path, cut_height_para=0.25, filter_row_sum_1=True):
         import matplotlib.colors as mcolors
         import matplotlib.patches as mpatches
-
+        
         def dendogram_vis(linkage_result, all_labels, title, cut_height, clustered_labels_series, cluster_to_color):
 
             # Node color
@@ -232,7 +285,7 @@ def cluster_genomes_func(df, output_path, output_ending, cut_height_para, dbscan
             plt.savefig(f'{output_path}/{folder.replace("_clustering", "")}/Tree.{folder}.png')
             plt.close()
 
-        # 2 Primary hierarchical clustering
+        # Primary hierarchical clustering
         dist_matrix = pdist(reduced_PCA, metric=metric)
         linkage_result = linkage(dist_matrix, method=method)
 
@@ -259,7 +312,7 @@ def cluster_genomes_func(df, output_path, output_ending, cut_height_para, dbscan
                 all_labels[genome] = preassigned[genome]
             else:
                 all_labels[genome] = clustered_labels_series[genome]
-        all_labels = all_labels.astype(int)
+        all_labels = all_labels.astype(int).copy()
 
         # 4 Assign unique colors to clusters
         unique_clusters = sorted(set(clustered_labels))
@@ -268,17 +321,17 @@ def cluster_genomes_func(df, output_path, output_ending, cut_height_para, dbscan
             cl: mcolors.to_hex(cmap(i)) for i, cl in enumerate(unique_clusters)
         }
 
-
         # 5 Plot dendrogram and pca
         title = f'{folder} with cut_height={cut_height_para} on PCA-reduced Data (n={len(X_cluster)})'
         dendogram_vis(linkage_result, all_labels, title, cut_height, clustered_labels_series, cluster_to_color)
-        pca_vis(full_clusters, clustered_indices, clustered_labels, output_path, folder, title)
+        pca_vis(pca_clusters, clustered_indices, clustered_labels, output_path, folder, title)
 
         return all_labels
 
     ward_cosinus_result = hierarchical_clustering(
         reduced_PCA,             # dimension reduced matrix used for clustering
         feature_matrix_color,    # dataframe with your "colors"
+        full_clusters,
         metric="cosine",         # cosine similarity distance
         method="ward",
         folder="ward_cosinus",
@@ -286,19 +339,20 @@ def cluster_genomes_func(df, output_path, output_ending, cut_height_para, dbscan
         cut_height_para=cut_height_para
     )
 
-    ward_jaccard_result = hierarchical_clustering(
+    ward_euclidean_result = hierarchical_clustering(
         reduced_PCA,
         feature_matrix_color,
-        metric="jaccard",
+        full_clusters,
+        metric="euclidean",
         method="ward",
-        folder="ward_jaccard",
+        folder="ward_euclidean",
         output_path=output_path,
         cut_height_para=cut_height_para
     )
 
-    return dbscan_result, ward_cosinus_result, ward_jaccard_result, feature_matrix_color
+    return dbscan_result, ward_cosinus_result, ward_euclidean_result, feature_matrix_color
 
-def plot_cluster_func(cluster_df, output_path, output_ending, scale, gene_of_interest, gene_lable, folder, organism_name_from_file, max_subplots=15):
+def plot_cluster_func(cluster_df, output_path, scale, gene_of_interest, gene_lable, folder, organism_name_from_file, max_subplots=15):
 
     '''Generate plots for a cluster.'''
     # Hatches are working now. The best way to use them is by setting ft.meta._ftsviewer_hatch attribute.
@@ -356,111 +410,10 @@ def plot_cluster_func(cluster_df, output_path, output_ending, scale, gene_of_int
             # Add legend outside the plot
             fig.legend(handles=legend_handles, title='Legend', bbox_to_anchor=(1.05, 1), loc='upper left')
 
-            #legend_handles = [
-            #    Patch(facecolor=color, label=label)
-            #    for label, color in name2color.items()
-            #    if isinstance(color, tuple) and len(color) == 3 and all(0 <= c <= 1 for c in color)
-            #]
-            #fig.legend(handles=legend_handles, title='Legend', bbox_to_anchor=(1.05, 1), loc='upper left')
-
         count = f"{cluster_df['cluster_label'].iloc[0]}"
         fig.savefig(f'{output_path}/{folder}/synteny_cluster_{count}_{fignum:03d}.png', bbox_inches='tight')
         fig.savefig(f'{output_path}/{folder}/synteny_cluster_{count}_{fignum:03d}.svg', bbox_inches='tight')
         plt.close(fig)
-
-# def old_plot_cluster_func(cluster_df, output_path, output_ending, scale, gene_of_interest, gene_lable, folder, max_subplots=15):
-#     genome_groups = list(cluster_df.groupby('genome'))
-#     num_subplots = int(np.ceil(len(genome_groups) / max_subplots))
-#     for subplot_idx in range(num_subplots):
-#         merged = {} # Merge all color dictionaries
-#         subplot_genomes = genome_groups[
-#             subplot_idx * max_subplots: (subplot_idx + 1) * max_subplots
-#         ]
-#         if not subplot_genomes:  # Added validation
-#             continue
-#         fig, axes = plt.subplots(len(subplot_genomes), 1, figsize=(12, len(subplot_genomes) * 1.2))
-#         axes = [axes] if len(subplot_genomes) == 1 else axes
-#         for i, (genome_name, genome_df) in enumerate(subplot_genomes):
-#             dicts_subplot, df_subplot = plot_genome_func(genome_df, axes[i], scale, gene_of_interest, gene_lable)
-#             merged.update(dicts_subplot)
-#             unique_organisms_name = genome_df['organism_name'].unique().tolist()[0]
-#             axes[i].set_title(unique_organisms_name, fontstyle='italic', loc='left')
-#         if gene_lable=='no': # Add legend to the subplot
-#             legend_handles = [
-#                 Patch(facecolor=color, label=label)
-#                 for label, color in merged.items()
-#                 if isinstance(color, tuple) and len(color) == 3 and all(0 <= c <= 1 for c in color)
-#             ]
-#             fig.legend(handles=legend_handles, title='Legend', bbox_to_anchor=(1.05, 1), loc='upper left')
-#         # If further spacing needed:
-#         plt.subplots_adjust(left=0.1, right=0.8, hspace=0.75)  # shrink plot area for
-#         count = f"{cluster_df['cluster_label'].iloc[0]}.{subplot_idx}"
-#         fig.savefig(f'{output_path}/{folder}/{count}.png', bbox_inches='tight')
-#         fig.savefig(f'{output_path}/{folder}/{count}.svg', bbox_inches='tight')
-#         plt.close(fig)
-#
-# def scale_genes(df, gene_name, target_length=50):
-#     # Find the row with the specified gene
-#     goi_row = df[df['gene'] == gene_name].iloc[0]
-#     # Calculate the current length of the CrfA gene
-#     crfa_length = goi_row['end'] - goi_row['start'] + 1
-#     # Calculate scale factor
-#     scale_factor = target_length / crfa_length
-#     # Reference position is the minimum start to maintain relative distances
-#     ref_start = df['start'].min()
-#     # Function to calculate adjusted positions
-#     def adjusted_positions(row):
-#         original_length = row['end'] - row['start'] + 1
-#         scaled_length = int(original_length * scale_factor)
-#         scaled_start = int((row['start'] - ref_start) * scale_factor)
-#         scaled_end = scaled_start + scaled_length - 1
-#         return pd.Series({'adjusted_start': scaled_start, 'adjusted_end': scaled_end})
-#     # Apply the function and assign new columns
-#     df[['adjusted_start', 'adjusted_end']] = df.apply(adjusted_positions, axis=1)
-#     return df
-#
-# def plot_genome_func(genome_df, ax, scale, gene_of_interest, gene_lable='no'):
-#     '''Plot a single genome.'''
-#     df = genome_df.sort_values(by=['start'])
-#     df['organism_name'] = genome_df['organism_name']
-#     min_start = df['start'].min()
-#     df['start'] = df['start'].astype(int)
-#     df['length'] = df['length'].astype(int)
-#     min_start = int(df['start'].min())
-#     if scale.lower() == 'yes':
-#         df = scale_genes(df, gene_of_interest)
-#         seqlen_distance = (df['adjusted_end'].max() - df['adjusted_start'].min()).astype(int)# Drop the original 'start' and 'end' columns
-#     else:
-#         max_distance = 0
-#         df['adjusted_start'] = (df['start'] - min_start) / 1000
-#         df['adjusted_end'] = (df['end'] - min_start) / 1000
-#         min_start = genome_df['start'].min()
-#         genome_locus_length = genome_df['end'].max() - min_start
-#         max_distance = max(max_distance, genome_locus_length)
-#         seqlen_distance = max_distance / 1000
-#     features = [Feature(row.type, start=row.adjusted_start, stop=row.adjusted_end, strand=row.orientation,
-#                         meta={'seqid': row.contig, 'organism_name': row.organism_name, 'name': row.gene, 'cluster_color': row.cluster_color})
-#                 for _, row in df.iterrows()]
-#     color_dic = dict(zip(df['gene'], df['cluster_color']))
-#     # New dictionaries to store cleaned colors and hatches
-#     clean_color_dic = {}
-#     hatch_dic = {}
-#     for gene, color_hatch in color_dic.items():
-#         if '_h_' in color_hatch:
-#             # Split into color and hatch parts
-#             color, hatch = color_hatch.split('_h_')
-#             clean_color_dic[gene] = color
-#             hatch_dic[gene] = hatch
-#         else:
-#             clean_color_dic[gene] = color_hatch  # just hex color, no hatch
-#     FeatureList(features).plot_ftsviewer(
-#         ax=ax, label=None if gene_lable=='no' else 'name',
-#         colorby='name', color=clean_color_dic,
-#         seqlen=seqlen_distance, figsize=(7, 5),
-#         with_ruler=False, show=False,
-#         labels_spacing=60, fontdict={'fontsize': 7})
-#     # color dic for legend
-#     return clean_color_dic, df
 
 def cosine_similarity(matrix):
     ''' Calculate norms of vectors & Scalar product matrix & External product norms and elementwise division -> Cosine similarity matrix '''
@@ -477,6 +430,7 @@ def write_labels(df, gene_of_interest, output_path, folder):
     ''' Writing some stats '''
     center_row = df[df['gene'] == gene_of_interest]
     new_df = center_row[['cluster_label', 'organism_name', 'contig', 'gene', 'original_start', 'original_end', 'orientation']]
+
     write_header = not os.path.exists(f'{output_path}/{folder}/gene_of_interest.tsv')     # Check if the file exists to decide whether to write the header
     new_df.to_csv(f'{output_path}/{folder}/gene_of_interest.tsv', mode='a', header=write_header, sep='\t', index=False)
 
@@ -492,14 +446,15 @@ def main():
         #try:
         print("Read data")
         df, organism_name_from_file = prepare_dataframe_func(args.input_file, args.gene_of_interest, args.gene_name, args.name_file)
-        print(df)
+
         print("Process for clustering")
-        dbscan_lables, ward_labels_cosinus, ward_labels_jaccard, feature_matrix_color = cluster_genomes_func(df, args.output_path, args.output_ending, args.cut_height_args, args.cluster, args.threshold)
+        dbscan_lables, ward_labels_cosinus, ward_labels_euclidean, feature_matrix_color = cluster_genomes_func(df, args.output_path, args.cut_height_args, args.cluster, args.threshold)
+
         print("Finished clustering")
-        lst = ['ward_cosinus', 'ward_jaccard', 'dbscan'] # 'dice' 'birch' 'complete', 'average', 'single', 'centroid', 'weighted', 'kmeans', 'hdbscan',
+        lst = ['ward_cosinus', 'ward_euclidean', 'dbscan'] # 'dice' 'birch' 'complete', 'average', 'single', 'centroid', 'weighted', 'kmeans', 'hdbscan',
         i = 0
 
-        for labels in [ward_labels_cosinus, ward_labels_jaccard, dbscan_lables]: # , ward_labels_dice, birch_labels
+        for labels in [ward_labels_cosinus, ward_labels_euclidean, dbscan_lables]: # , ward_labels_dice, birch_labels
             print("Plots " + str(lst[i]))
             # correlation of cluster labels to each genome
             genome_to_cluster = pd.Series(labels, index=feature_matrix_color.index).groupby(level=0).first()
@@ -512,15 +467,15 @@ def main():
 
             cluster_stats = []
             for cluster_label, cluster_df in df.groupby('cluster_label'):
-
-                for_aln(cluster_label, lst[i], cluster_df, args.output_path)
+                if args.microsynteny_logo == 'yes':
+                    for_aln(cluster_label, lst[i], cluster_df, args.output_path)
 
                 # If the list is not empty, check if any contigs in the current cluster_df are in the unique_contigs list
                 if unique_contigs and not cluster_df['contig'].isin(unique_contigs).any():
                     continue # Skip to the next cluster if no contigs from the list are found
 
                 write_labels(cluster_df, args.gene_of_interest, args.output_path, lst[i])
-                plot_cluster_func(cluster_df, args.output_path, args.output_ending, args.scale, args.gene_of_interest, args.gene_lable, lst[i], organism_name_from_file)
+                plot_cluster_func(cluster_df, args.output_path, args.scale, args.gene_of_interest, args.gene_lable, lst[i], organism_name_from_file)
                 cluster_size = cluster_df['genome'].nunique()
                 color_count = cluster_df['cluster_color'].nunique()
 

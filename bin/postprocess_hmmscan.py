@@ -30,7 +30,7 @@ def read_file(hmmscan_file):
             row = line.strip().split()
             # Join all columns from index 18 to the end as description
             description = ' '.join(row[18:])
-            
+            print(row)
             result = {
                 'target_name': row[0],
                 'target_accession': row[1],
