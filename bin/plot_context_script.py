@@ -140,7 +140,9 @@ def cluster_genomes_func(df, output_path, cut_height_para, dbscan_size=2, dbscan
             cbar_kws={'label': 'Pearson Korrelationskoeffizient'}
         )
         plt.title('Korrelations-Heatmap')
-        plt.savefig('/data/fass5/projects/ProjectFroehlich/result_crfA/Korrelations_Heatmap.png')
+        plt.savefig(f'{output_path}/korrelations_heatmap.png')
+        plt.savefig(f'{output_path}/korrelations_heatmap.svg')
+        plt.close()
 
         df_cols = df.columns
         p_values_matrix = np.zeros((len(df_cols), len(df_cols)))
@@ -168,9 +170,9 @@ def cluster_genomes_func(df, output_path, cut_height_para, dbscan_size=2, dbscan
             cbar_kws={'label': 'P-Wert (Signifikanzniveau)', 'ticks': [0.0, 0.01, 0.02, 0.03, 0.04, 0.05]}
         )
         plt.title('P-value')
-        plt.savefig('/data/fass5/projects/ProjectFroehlich/result_crfA/p_value.png')
-
-
+        plt.savefig(f'{output_path}/p_value.png')
+        plt.savefig(f'{output_path}/p_value.svg')
+        plt.close()
 
     clustering_mask = np.array(clustering_mask)
     X_cluster = X[clustering_mask]

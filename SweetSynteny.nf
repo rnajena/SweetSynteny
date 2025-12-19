@@ -208,7 +208,7 @@ process clusterColoring {
 
 // Process for plotting genomic context
 process plottingContext {
-    publishDir "/data/fass5/projects/ProjectFroehlich/only_cc/crfa/4_plot", mode: 'copy'
+    publishDir "${params.output_dir}/4_plot", mode: 'copy'
     
     input:
     path merged_with_color
@@ -217,6 +217,10 @@ process plottingContext {
     path "dbscan"
     path "ward_cosinus"
     path "ward_euclidean"
+    path "p_value.png"
+    path "p_value.svg"
+    path "korrelations_heatmap.png"
+    path "korrelations_heatmap.svg"
 
     script:
     """
