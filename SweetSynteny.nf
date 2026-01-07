@@ -105,7 +105,7 @@ process getNeighbours {
         tuple val(id), 
         path(genome), 
         path(gff), 
-        path(search_result)
+        val(search_result)
     
     output:
         tuple val(id), 
@@ -117,25 +117,47 @@ process getNeighbours {
     
     // Convert the Groovy list [gene, ncRNA] into a space-separated string for the shell
     def feature_list = params.including_features.join(' ')
+
+    // Logic: if search_result is a path/file, get its name; otherwise it's just a string
+    def hit_input = (search_result instanceof Path) ? "--hit_file $search_result" : ""
+    
     """
     mkdir -p "${params.output_dir}/2_neighbour"
-    echo {$params.including_features}
-    python ${projectDir}/bin/get_neighbours_script.py \\
-        --hit_file $search_result \\
-        --input_type ${params.types} \\
-        --fna_file $genome \\
-        --gff_file $gff \\
-        --gene_of_interest ${params.gene_of_interest} \\
-        --neighbours ${params.neighbours} \\
-        --output_path ${id}.nb \\
-        --promoter ${params.promoter} \\
-        --promoter_len ${params.promoter_len} \\
-        --including_features ${feature_list} \\
-        --evalue_threshold_blast ${params.evalue_threshold_blast} \\
-        --evalue_threshold_infernal ${params.evalue_threshold_infernal} \\
-        --len_threshold_blast ${params.len_threshold_blast} \\
-        --len_threshold_infernal ${params.len_threshold_infernal} \\
-        --from_gff_feature ${params.from_gff_feature}
+
+    if [ "${params.types}" != "from_gff" ]; then
+        python ${projectDir}/bin/get_neighbours_script.py \\
+            --hit_file $search_result \\
+            --input_type ${params.types} \\
+            --fna_file $genome \\
+            --gff_file $gff \\
+            --gene_of_interest ${params.gene_of_interest} \\
+            --neighbours ${params.neighbours} \\
+            --output_path ${id}.nb \\
+            --promoter ${params.promoter} \\
+            --promoter_len ${params.promoter_len} \\
+            --including_features ${feature_list} \\
+            --evalue_threshold_blast ${params.evalue_threshold_blast} \\
+            --evalue_threshold_infernal ${params.evalue_threshold_infernal} \\
+            --len_threshold_blast ${params.len_threshold_blast} \\
+            --len_threshold_infernal ${params.len_threshold_infernal} \\
+            --from_gff_feature ${params.from_gff_feature}
+    else
+        python ${projectDir}/bin/get_neighbours_script.py \\
+            --input_type ${params.types} \\
+            --fna_file $genome \\
+            --gff_file $gff \\
+            --gene_of_interest ${params.gene_of_interest} \\
+            --neighbours ${params.neighbours} \\
+            --output_path ${id}.nb \\
+            --promoter ${params.promoter} \\
+            --promoter_len ${params.promoter_len} \\
+            --including_features ${feature_list} \\
+            --evalue_threshold_blast ${params.evalue_threshold_blast} \\
+            --evalue_threshold_infernal ${params.evalue_threshold_infernal} \\
+            --len_threshold_blast ${params.len_threshold_blast} \\
+            --len_threshold_infernal ${params.len_threshold_infernal} \\
+            --from_gff_feature ${params.from_gff_feature}
+    fi
     """
 }
 
@@ -245,21 +267,28 @@ workflow {
     genome_gff_pairs = Channel
         .fromPath("${params.genomes_dir}/*", type: 'dir')
         .map { subfolder -> 
-            def fna = subfolder.listFiles().find { it.name.endsWith('.fna') }
-            def gff = subfolder.listFiles().find { it.name.endsWith("${params.annotation_type}") }
-            tuple(subfolder.name, fna, gff)
+            def fna = subfolder.listFiles().find { it.name.endsWith('.fasta') || it.name.endsWith('.fna') }
+            def gff = subfolder.listFiles().find { it.name.endsWith('.gff') }
+            if (fna && gff) [subfolder.name, fna, gff]
         }
-        .filter { it[1] != null && it[2] != null }
+        .filter { it != null }
 
-
-    // Run search process
-    search_results = runSearch(genome_gff_pairs)
-    // Filter out empty results
-    non_empty_results = search_results.filter { id, genome, gff, result ->
-        result.size() > 0
+    if (params.types == 'from_gff') {
+            // Skip search: Prepare the channel to match the input format for getNeighbours
+            ready_for_neighbours = genome_gff_pairs.map { id, fna, gff -> 
+                tuple(id, fna, gff, params.gene_of_interest) 
+            }
+    } else {
+            // Run search: Process through runSearch and filter
+            search_results = runSearch(genome_gff_pairs)
+            
+            ready_for_neighbours = search_results.filter { id, genome, gff, result ->
+                result.size() > 0
+            }
     }
-    // Get neighboring genes
-    neighbour_results = getNeighbours(non_empty_results)
+
+    // 3. Final Step: Get neighboring genes
+    neighbour_results = getNeighbours(ready_for_neighbours)
     // Collect TSV and MFNA files separately
     tsv_files = neighbour_results.map { it[1] }.collect()
     mfna_files = neighbour_results.map { it[2] }.collect()
