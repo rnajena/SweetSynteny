@@ -52,7 +52,8 @@ def setup_parser():
     parser.add_argument('--len_threshold_blast', type=int, default=40, help='Length threshold for BLAST hits')
     parser.add_argument('--len_threshold_infernal', type=int, default=20, help='Length threshold for Infernal hits')
     parser.add_argument('--from_gff_feature', type=str, default="ID", help='Select which feature show match the string. Default: ID, could also be e.g. product or name')
-
+    parser.add_argument('--ignore_overlaps', action='store_true', help='If set, do not filter or exit based on overlapping features.')
+    parser.add_argument('--substring_search', action='store_true', help='If set, search for gene_of_interest as a substring (e.g., "SRP" finds "small_SRP").')
     return parser
 
 def process_hits(hit_file, input_type, gene_of_interest, args):
@@ -180,48 +181,66 @@ def generate_entry(feature, counter, args):
 def process_neighborhood(args, merged_features, seqs):
     """ For each gene of interest, find its neighbors and write their data to output files. """
     counter = 0 
+    # Track processed locations to avoid duplicates in overlapping SRPs
+    processed_locations = set()
 
-    # Use a flag to track if the current feature is a gene of interest
-    is_gene_of_interest = False
     for idx, feature in enumerate(merged_features):
+        is_gene_of_interest = False
+        
+        # 1. Identification logic (remains the same)
         if args.input_type == 'from_gff':
-            if args.from_gff_feature == "ID":
-                if feature.meta._gff.ID == args.gene_of_interest:
-                    is_gene_of_interest = True
-            elif args.from_gff_feature == "product":
-                try:
-                    # Use a more specific exception for missing attributes
-                    if args.gene_of_interest in feature.meta._gff.product:
+            meta = getattr(feature.meta, '_gff', None)
+            if meta:
+                target_value = getattr(meta, args.from_gff_feature, "")
+                if isinstance(target_value, list):
+                    target_value = " ".join(target_value)
+                elif target_value is None:
+                    target_value = ""
+
+                if args.substring_search:
+                    if args.gene_of_interest in target_value:
                         is_gene_of_interest = True
-                except AttributeError:
-                    # Pass silently for features like pseudogenes that lack a 'product'
-                    pass
-        else: # blast and infernal
+                else:
+                    if args.gene_of_interest == target_value:
+                        is_gene_of_interest = True
+        else:
             if args.input_type.replace("tblastn","blast") == feature.meta._fmt:
                 is_gene_of_interest = True
 
-        # ---- If it's a gene of interest, process its neighbors ----
-        if is_gene_of_interest:
-            neighbors = get_neighbor_features(merged_features, idx, args.neighbours)
+        # 2. Check if we have already processed this specific genomic spot
+        # We use a tuple of (seqid, start, stop) as a unique key
+        location_key = (feature.seqid, feature.loc.start, feature.loc.stop)
+        
+        # Additional check: If ignore_overlaps is TRUE, we might want to skip 
+        # features that are nested inside one another to avoid duplicates.
+        is_duplicate_location = False
+        for loc in processed_locations:
+            # Check if current feature is inside an already processed range
+            # or vice versa (Overlap check)
+            if feature.seqid == loc[0]:
+                if not (feature.loc.stop < loc[1] or feature.loc.start > loc[2]):
+                    is_duplicate_location = True
+                    break
+
+        # ---- Process if it's a match AND we haven't seen this area ----
+        if is_gene_of_interest and not is_duplicate_location:
+            neighbors = get_neighbor_features(merged_features, idx, args.neighbours, args.ignore_overlaps)
             if neighbors:
-                # Generate TSV entry and write data for each neighbor
                 for neighbor in neighbors:
                     entry = generate_entry(neighbor, counter, args)
                     write_neighbour_data(
                         neighbor, entry, args.output_path, seqs, args.input_type, args.gene_of_interest
                     )
+                
+                # Mark this location as processed
+                processed_locations.add(location_key)
+                counter += 1
 
-            # ---- Extract and save promoter regions if requested ----
             if args.promoter == 'yes':
                 entry = generate_entry(feature, counter, args)
-                # Check for the sequence in the dictionary before passing it
                 seq = seqs.d.get(feature.seqid)
                 if seq:
                     extract_and_save_promoter_regions(args, feature, seq, entry)
-
-            # Reset the flag and increment the counter for the next iteration
-            is_gene_of_interest = False
-            counter += 1
 
 def check_overlap(center, overlaps):
     """ Only keep overlaps if the overlap covers >50% of both the center and the neighbor, or if they are on opposite strands. """
@@ -252,7 +271,7 @@ def check_overlap(center, overlaps):
     
     return new_list
 
-def get_neighbor_features(features, index, neighbors):
+def get_neighbor_features(features, index, neighbors, ignore_overlaps=False):
     """ Find neighboring features for the feature at 'index'. If neighbors is 'x,y', return x upstream and y downstream genes.
     If neighbors is 'x:y', return all features within x upstream and y downstream nucleotides. """
     
@@ -261,8 +280,8 @@ def get_neighbor_features(features, index, neighbors):
     if ',' in neighbors:
         up, down = map(int, neighbors.split(','))
         overlaps, upstream, downstream = [], [], []
+        
         for f in features:
-
             if center.seqid != f.seqid or f == center:
                 continue
                 
@@ -274,14 +293,19 @@ def get_neighbor_features(features, index, neighbors):
             elif f.loc.start > center.loc.stop:
                 downstream.append(f)
 
-        # Filter overlaps
+        result = []
+        
+        # Logic for overlaps
         if overlaps:
-            overlaps_filtered = check_overlap(center, overlaps)
-            if not overlaps_filtered:  # empty → gene did not pass thresholds
-                return []
-            result = overlaps_filtered[:]
-        else:
-            result = [] # no overlapping gene
+            if ignore_overlaps:
+                # Treat overlaps as valid neighbors to include in output
+                result.extend(overlaps)
+            else:
+                overlaps_filtered = check_overlap(center, overlaps)
+                # If they pass the 50% rule, include them
+                if overlaps_filtered:
+                    result.extend(overlaps_filtered)
+                # Note: We no longer return [] here if overlaps_filtered is empty
 
         # Sort and select closest upstream and downstream
         upstream = sorted(upstream, key=lambda x: -x.loc.stop)
@@ -291,7 +315,6 @@ def get_neighbor_features(features, index, neighbors):
         result.extend(downstream[:down])
         result.append(center)
 
-        # Return all neighbors sorted by start position
         return sorted(result, key=lambda x: x.loc.start)
 
     else:

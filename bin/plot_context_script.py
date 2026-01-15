@@ -25,9 +25,9 @@ def setup_parser_func():
     parser.add_argument('--output_path', required=True, help='Path to final png or svg')
     parser.add_argument('--cluster', type=int, default=2, help='Minimal size for a cluster')
     parser.add_argument('--threshold', type=float, default=0.9, help='Similarity threshold for clustering')
-    parser.add_argument('--gene_of_interest', required=True, help='gene_of_interest')
-    parser.add_argument('--gene_name', required=False, default='db', help='gene_of_interest')
-    parser.add_argument('--name_file', required=False, help='Renaming contigs to genome names')
+    parser.add_argument('--gene_of_interest', required=True, help='Name of gene_of_interest')
+    parser.add_argument('--gene_name', required=False, default='db', help='Use db-name [db] or gene-ids [id] for plotting.')
+    parser.add_argument('--name_file', required=False, help='Renaming contigs to genome names.')
     parser.add_argument('--gene_lable', required=False, choices=['yes', 'no'], default='yes', help='Add lables to gene [yes as default]')
     parser.add_argument('--cut_height_args', type=float, default=0, help='Cut threshold for dendogram clustering.')
     parser.add_argument('--contig_cluster_file', required=False, help='Filter for Contigs your are interested in.')
@@ -65,11 +65,17 @@ def prepare_dataframe_func(input_file, gene_of_interest, gene_name, genome_name_
     df['original_start'] = df['start']
     df['original_end'] = df['end']
 
-    if gene_name == 'db':
-        df['gene'] = df['gene_db'] # Name from Pfam or Rfam
+    # Use the DB name for logic/clustering (this keeps colors stable)
+    df['gene'] = df['gene_db']
 
+    # Create the display column explicitly
     if gene_name == 'id':
-        df['gene'] = df['gene_id']
+        df['display_name'] = df['gene_id']
+    else:
+        df['display_name'] = df['gene_db']
+    
+    # Ensure it's a string to avoid downstream issues
+    df['display_name'] = df['display_name'].astype(str)
 
     if genome_name_tsv:
         rename_df = pd.read_csv(genome_name_tsv, sep='\t')
@@ -108,7 +114,6 @@ def cluster_genomes_func(df, output_path, cut_height_para, dbscan_size=2, dbscan
     genome_to_organism = df.set_index('genome')['organism_name'].to_dict()
 
     X = feature_matrix_color.values.copy()
-
     # 1 Pre-assign cluster labels for simple cases AND dimension reduction
     preassigned = {}
     clustering_mask = []
@@ -218,6 +223,8 @@ def cluster_genomes_func(df, output_path, cut_height_para, dbscan_size=2, dbscan
     # 2 Clustering
     def density_clustering(eps, min_samples, reduced_PCA, pca_clusters, folder):
 
+        #dbscan = HDBSCAN(min_cluster_size=5, min_samples=1, cluster_selection_epsilon=0.02
+        #cluster_selection_method='eom' # Ensures stability for big clusters) #eps=eps, 
         dbscan = DBSCAN(eps=eps, min_samples=min_samples)
         dbscan_clusters = dbscan.fit_predict(reduced_PCA)
 
@@ -362,32 +369,45 @@ def plot_cluster_func(cluster_df, output_path, scale, gene_of_interest, gene_lab
     # color can be set in the same way or via colorby and color arguments of plot_ftsviewer
     # needs sugar v1.0
     name2color = {gene: color for gene, color in zip(cluster_df['gene'], cluster_df['cluster_color'])}
+    
     all_fts = FeatureList([
         Feature(row.type, start=row.start, stop=row.end, strand=row.orientation,
-                meta={'seqid': row.contig, 'hit': row.genome, 'organism_name': row.organism_name, 'name': row.gene})
+                meta={
+                    'seqid': row.contig, 
+                    'hit': row.genome, 
+                    'organism_name': row.organism_name, 
+                    'logic_name': row.gene,        # Use for alignment/color
+                    'label_name': getattr(row, 'display_name', row.gene) # Fallback to gene if display_name fails
+                })
                 for row in cluster_df.itertuples(index=False)
         ])
 
-    scale = scale.lower() == 'yes'
-    label = gene_lable.lower() == 'yes'
+    scale_bool = scale.lower() == 'yes'
+    label_bool = gene_lable.lower() == 'yes'
     groups = list(all_fts.groupby('hit').values())
+
     for fignum in range(0, 1 + (len(groups)-1)//max_subplots):
         fts = FeatureList()
         for g in groups[fignum * max_subplots:(fignum + 1) * max_subplots]:
             fts.extend(g)
-        align = fts.select(name=gene_of_interest) if scale else None
+        align_features = FeatureList([f for f in fts if f.meta.get('logic_name') == gene_of_interest]) if scale_bool else None
+        #align = fts.select(name=gene_of_interest) if scale else None
         fig = fts.plot_ftsviewer(
             groupby='hit',
             axlabel='organism_name' if organism_name_from_file.lower() == 'yes' else 'seqid',
-            label='name' if label else None,
-            align=align, crop=500,
-            sharex=scale, xticks=False,
-            colorby='name', color=name2color,
+            # Display the unique ID
+            label=lambda ft: ft.meta['label_name'] if label_bool else None,
+            align=align_features,
+            crop=500,
+            sharex=scale_bool,
+            colorby=lambda ft: ft.meta['logic_name'],
+            color=name2color,
             figsize=(10, 1.5*len(fts.groupby('hit'))), ncols=1,
             with_ruler=False,
             labels_spacing=8, fontdict={'fontsize': 7}
         )
-        if not label: # Add legend to the subplot
+
+        if not label_bool: # Add legend to the subplot
             # Track which (color, name) combinations we've already seen
             seen_combinations = set()
             legend_handles = []
