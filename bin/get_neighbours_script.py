@@ -5,7 +5,7 @@ from sugar import read_fts, read, Feature
 
 OUTPUT_FILES = {
     'protein': ('.protein.mfaa', True),
-    'srna': ('.srna.mfna', False),
+    'ncrna': ('.ncrna.mfna', False),
 }
 
 FEATURE_TO_OUTPUT_TYPE = {
@@ -14,38 +14,42 @@ FEATURE_TO_OUTPUT_TYPE = {
     'pseudogene': 'protein',
     'tblastn': 'protein',
     'CDS': 'protein',
-    # 'srna' 
-    'tRNA': 'srna',
-    'rRNA': 'srna',
-    'ncRNA': 'srna',
-    'infernal': 'srna',
-    'misc_RNA': 'srna',
-    'RNase_P_RNA': 'srna',
+    # 'ncrna' 
+    'tRNA': 'ncrna',
+    'rRNA': 'ncrna',
+    'ncRNA': 'ncrna',
+    'infernal': 'ncrna',
+    'misc_RNA': 'ncrna',
+    'RNase_P_RNA': 'ncrna',
 }
 
 BLAST_FMT = 'qseqid sseqid bitscore evalue pident length mismatch gapopen qstart qend qlen sstart send sstrand slen qseq sseq'
 
-def validate_neighbors(neighbors):
-    """Ensure the neighbors parameter is formatted correctly."""
-    if ',' not in neighbors and ':' not in neighbors:
-        raise ValueError('Invalid neighbors format. Use x,y or x:y')
+def validate_neighbours(neighbours):
+    """Ensure the neighbours parameter is formatted correctly."""
+    if ',' not in neighbours and ':' not in neighbours:
+        raise ValueError('Invalid neighbours format. Use x,y or x:y')
 
 def setup_parser():
     """Configure command-line argument parser."""
-    parser = argparse.ArgumentParser(description='Process genomic features and extract neighbors')
+    parser = argparse.ArgumentParser(description='Process genomic features and extract neighbours\npython get_neighbours_script.py --hit_file hits.txt --input_type {blastn,blastp,infernal,tblastn,from_gff}\n--bio_type {ncRNA,protein} --gff_file GFF_FILE --fna_file FNA_FILE\n--gene_of_interest GENE_OF_INTEREST -output_path OUTPUT_PATH')
     parser.add_argument('--hit_file', help='Path to hit file (blast/infernal). Required if input_type is not "from_gff"')
     parser.add_argument('--input_type', required=True,
                         choices=['blastn', 'blastp', 'infernal', 'tblastn', 'from_gff'],
                         help='Input file type')
+    parser.add_argument('--bio_type', required=True,
+                        choices=['ncRNA', 'protein'], help='Bio type')
     parser.add_argument('--gff_file', required=True, help='Path to GFF/GBK file')
     parser.add_argument('--fna_file', required=True, help='Path to FNA sequence file')
     parser.add_argument('--gene_of_interest', required=True, help='Target gene identifier (e.g., ID, product name or query ID)')
-    parser.add_argument('--neighbours', type=str, default='2:2',
-                        help='Neighbor range: x,y (genes) or x:y (nucleotides). Default: 2:2')
+    parser.add_argument('--neighbours', type=str, default='4,4',
+                        help='Neighbor range: x,y (genes) or x:y (nucleotides). Default: 4,4')
     parser.add_argument('--output_path', required=True, help='Base path for output files (e.g., /path/to/results/my_run)')
     parser.add_argument('--promoter', type=str, default='no', choices=['yes', 'no'], help='Include promoter region?')
     parser.add_argument('--promoter_len', type=int, default=100, help='Promoter region length (default: 100 nt)')
-    parser.add_argument('--including_features', nargs='+', default=['gene', 'pseudogene', 'ncRNA'], 
+    parser.add_argument('--promoter_mode', choices=['fixed','to_next_gene'],
+                        default='fixed', help='How to define promoter: fixed length in nt or to next gene boundary')
+    parser.add_argument('--including_features', nargs='+', default=['CDS', 'pseudogene', 'ncRNA', 'rRNA', 'tRNA'], 
                         help='Include GFF features like genes, pseudogene, ncRNA. Maybe add CDS or tRNA.')
     parser.add_argument('--evalue_threshold_blast', type=float, default=1, help='E-value threshold for BLAST hits')
     parser.add_argument('--evalue_threshold_infernal', type=float, default=0.1, help='E-value threshold for Infernal hits')
@@ -53,8 +57,9 @@ def setup_parser():
     parser.add_argument('--len_threshold_infernal', type=int, default=20, help='Length threshold for Infernal hits')
     parser.add_argument('--from_gff_feature', type=str, default="ID", help='Select which feature show match the string. Default: ID, could also be e.g. product or name')
     parser.add_argument('--ignore_overlaps', action='store_true', help='If set, do not filter or exit based on overlapping features.')
+    parser.add_argument('--overlap_threshold', type=float, default=0.75, help='Overlap threshold for filtering overlapping features with the gene of interest (default: 0.75)')
     parser.add_argument('--substring_search', action='store_true', help='If set, search for gene_of_interest as a substring (e.g., "SRP" finds "small_SRP").')
-    return parser
+    return parser 
 
 def process_hits(hit_file, input_type, gene_of_interest, args):
     """Read and filter hit file (BLAST/Infernal) for the gene of interest."""
@@ -119,16 +124,21 @@ def _get_biotype(feature, meta: dict, args) -> str:
     # 1. Special types for hits (tblastn, infernal)
     if args.input_type == 'tblastn' and feature.meta._fmt == 'blast':
         return 'tblastn'
+    if args.input_type == 'blastn' and feature.meta._fmt == 'blast':
+        return 'blastn'
+    if args.input_type == 'blastp' and feature.meta._fmt == 'blast':
+        return 'blastp'
     if args.input_type == 'infernal' and feature.meta._fmt == 'infernal':
         return 'infernal'
         
     # 2. Preferred biotype fields (gene_biotype, feature type, format)
-    return (
-        meta.get('gene_biotype') or
-        getattr(feature, 'type', None) or
-        meta.get('_fmt') or
-        'unknown' # Fallback
-    )
+    else:
+        return (
+            meta.get('gene_biotype') or
+            getattr(feature, 'type', None) or
+            meta.get('_fmt') or
+            'unknown' # Fallback
+        )
 
 def generate_entry(feature, counter, args):
     """Create a TSV line for a feature, including seqid, name, coordinates, orientation, and biotype."""
@@ -157,8 +167,8 @@ def generate_entry(feature, counter, args):
         name = _find_feature_name(meta, standard_priority)
         # Ensure that the name is not empty if ID is available.
         if not name:
-             name = meta.get('ID', "")
-             
+            name = meta.get('ID', "")
+
     # 2. Determine your biotype
     gene_biotype = _get_biotype(feature, meta, args)
 
@@ -179,7 +189,7 @@ def generate_entry(feature, counter, args):
     return '\t'.join(fields)
 
 def process_neighborhood(args, merged_features, seqs):
-    """ For each gene of interest, find its neighbors and write their data to output files. """
+    """ For each gene of interest, find its neighbours and write their data to output files. """
     counter = 0 
     # Track processed locations to avoid duplicates in overlapping SRPs
     processed_locations = set()
@@ -206,6 +216,10 @@ def process_neighborhood(args, merged_features, seqs):
         else:
             if args.input_type.replace("tblastn","blast") == feature.meta._fmt:
                 is_gene_of_interest = True
+            if args.input_type.replace("blastn","blast") == feature.meta._fmt:
+                is_gene_of_interest = True
+            if args.input_type.replace("blastp","blast") == feature.meta._fmt:
+                is_gene_of_interest = True
 
         # 2. Check if we have already processed this specific genomic spot
         # We use a tuple of (seqid, start, stop) as a unique key
@@ -224,26 +238,29 @@ def process_neighborhood(args, merged_features, seqs):
 
         # ---- Process if it's a match AND we haven't seen this area ----
         if is_gene_of_interest and not is_duplicate_location:
-            neighbors = get_neighbor_features(merged_features, idx, args.neighbours, args.ignore_overlaps)
-            if neighbors:
-                for neighbor in neighbors:
+
+            neighbours = get_neighbor_features(merged_features, idx, args.neighbours, args.overlap_threshold, args.ignore_overlaps)
+            if neighbours:
+                for neighbor in neighbours:
                     entry = generate_entry(neighbor, counter, args)
                     write_neighbour_data(
-                        neighbor, entry, args.output_path, seqs, args.input_type, args.gene_of_interest
+                        neighbor, entry, args.output_path, seqs, args.input_type, args.bio_type, args.gene_of_interest
                     )
                 
                 # Mark this location as processed
                 processed_locations.add(location_key)
                 counter += 1
-
+            # inside the loop where you call extract_and_save_promoter_regions
             if args.promoter == 'yes':
-                entry = generate_entry(feature, counter, args)
-                seq = seqs.d.get(feature.seqid)
-                if seq:
-                    extract_and_save_promoter_regions(args, feature, seq, entry)
+                coords = get_promoter_coords(feature, merged_features, args.promoter_len, args.promoter_mode)
+                if coords:
+                    start_pos, end_pos = coords
+                    seq = seqs.d.get(feature.seqid)
+                    if seq:
+                        extract_and_save_promoter_regions(args, feature, seq, entry, start_pos, end_pos, Path(args.output_path))
 
-def check_overlap(center, overlaps):
-    """ Only keep overlaps if the overlap covers >50% of both the center and the neighbor, or if they are on opposite strands. """
+def check_overlap(center, overlaps, overlap_threshold):
+    """ Only keep overlaps if the overlap covers >75% of both the center and the neighbor, or if they are on opposite strands. """
     new_list = []
     c_start, c_stop = center.loc.start, center.loc.stop
     c_length = c_stop - c_start + 1
@@ -263,7 +280,7 @@ def check_overlap(center, overlaps):
         gene_percent = overlap_length / g_length
         
         # Keep if >50% overlap or on opposite strands
-        if center_percent > 0.5 and gene_percent > 0.5:
+        if center_percent > overlap_threshold and gene_percent > overlap_threshold:
             new_list.append(gene)
         
         elif gene.loc.strand != center.loc.strand:
@@ -271,20 +288,25 @@ def check_overlap(center, overlaps):
     
     return new_list
 
-def get_neighbor_features(features, index, neighbors, ignore_overlaps=False):
-    """ Find neighboring features for the feature at 'index'. If neighbors is 'x,y', return x upstream and y downstream genes.
-    If neighbors is 'x:y', return all features within x upstream and y downstream nucleotides. """
+def get_neighbor_features(features, index, neighbours, overlap_threshold, ignore_overlaps=False):
+    """ Find neighboring features for the feature at 'index'. If neighbours is 'x,y', return x upstream and y downstream genes.
+    If neighbours is 'x:y', return all features within x upstream and y downstream nucleotides. """
     
     center = features[index]   
+    
+    if ',' in neighbours:
+        up, down = map(int, neighbours.split(','))
 
-    if ',' in neighbors:
-        up, down = map(int, neighbors.split(','))
+        if center.loc.strand == '-':
+            # Swap the counts so 'up' refers to higher coordinates 
+            # and 'down' refers to lower coordinates.
+            up, down = down, up
+            
         overlaps, upstream, downstream = [], [], []
-        
+
         for f in features:
             if center.seqid != f.seqid or f == center:
                 continue
-                
             # Check for overlap
             if not (f.loc.stop < center.loc.start or f.loc.start > center.loc.stop):
                 overlaps.append(f)
@@ -298,10 +320,10 @@ def get_neighbor_features(features, index, neighbors, ignore_overlaps=False):
         # Logic for overlaps
         if overlaps:
             if ignore_overlaps:
-                # Treat overlaps as valid neighbors to include in output
+                # Treat overlaps as valid neighbours to include in output
                 result.extend(overlaps)
             else:
-                overlaps_filtered = check_overlap(center, overlaps)
+                overlaps_filtered = check_overlap(center, overlaps, overlap_threshold=0.75)
                 # If they pass the 50% rule, include them
                 if overlaps_filtered:
                     result.extend(overlaps_filtered)
@@ -319,12 +341,16 @@ def get_neighbor_features(features, index, neighbors, ignore_overlaps=False):
 
     else:
         # Nucleotide-based neighborhood
-        up, down = map(int, neighbors.split(':'))
+        up, down = map(int, neighbours.split(':'))
+        if center.loc.strand == '-':
+            # Swap the counts so 'up' refers to higher coordinates 
+            # and 'down' refers to lower coordinates.
+            up, down = down, up
         start_pos = center.loc.start - up
         stop_pos = center.loc.stop + down
         return [ft for ft in features if ft.loc.start >= start_pos and ft.loc.stop <= stop_pos]
 
-def write_neighbour_data(feature, entry, output_path, seqs, input_type, gene_of_interest):
+def write_neighbour_data(feature, entry, output_path, seqs, input_type, bio_type, gene_of_interest):
     """ Write the neighbor's sequence and annotation to the appropriate output files. """
     
     base_path = Path(output_path)
@@ -354,7 +380,8 @@ def write_neighbour_data(feature, entry, output_path, seqs, input_type, gene_of_
     bio_type = entry.strip().split('\t')[-1]
 
     # Write annotation entry to TSV
-    with open(str(base_path) + ".tsv", 'a') as tsv_file:
+    tsv_path = base_path.with_suffix('.tsv')
+    with tsv_path.open('a', newline='') as tsv_file: 
         tsv_file.write(entry + "\n")
 
     output_type = FEATURE_TO_OUTPUT_TYPE.get(bio_type)
@@ -374,24 +401,47 @@ def write_neighbour_data(feature, entry, output_path, seqs, input_type, gene_of_
 
             out_file.write(f'{content}\n')
 
-def extract_and_save_promoter_regions(args, feature, seq, entry):
-    """ Extract promoter regions for the gene of interest and write them to a new mfna file. """
-    # 1. Define file path
-    output_path = Path(args.output_path)
+def get_promoter_coords(center, features, promoter_len, mode='fixed'):
+    """Return (start, end) inclusive promoter coords or None if invalid."""
+    seqid = center.seqid
+    # gather features on same seq sorted by start
+    same = [f for f in features if f.seqid == seqid and f != center]
+    same = sorted(same, key=lambda x: x.loc.start)
 
-    # 2. Determine promoter coordinates
-    promoter_start = max(0, feature.loc.start - args.promoter_len)
-    promoter_end = feature.loc.start - 1
+    if center.loc.strand == '+':
+        promoter_end = center.loc.start - 1
+        if promoter_end < 0:
+            return None
+        if mode == 'fixed':
+            promoter_start = max(0, center.loc.start - promoter_len)
+        else:  # to_next_gene
+            # find nearest upstream gene ending before center.start
+            upstream = [f for f in same if f.loc.stop < center.loc.start]
+            promoter_start = upstream[-1].loc.stop + 1 if upstream else 0
 
-    # 3. Extract promoter sequence and header
-    promoter_entry = f'{entry.split()[0]}\t{entry.split()[1]}\t{promoter_start}\t{feature.loc.start-1}\t{entry.split()[4]}\tpromoter\n'
+    else:  # '-' strand: promoter is downstream of feature.stop
+        promoter_start = center.loc.stop + 1
+        if mode == 'fixed':
+            promoter_end = promoter_start + promoter_len - 1
+        else:  # to_next_gene
+            # find nearest downstream gene starting after center.stop
+            downstream = [f for f in same if f.loc.start > center.loc.stop]
+            promoter_end = downstream[0].loc.start - 1 if downstream else None
+
+    if promoter_end is None or promoter_start > promoter_end:
+        return None
+    return (promoter_start, promoter_end)
+
+def extract_and_save_promoter_regions(args, feature, seq, entry, promoter_start, promoter_end, output_base: Path):
+    """Write promoter seq defined by promoter_start..promoter_end inclusive."""
+    promoter_entry = f'{entry.split()[0]}\t{entry.split()[1]}\t{promoter_start}\t{promoter_end}\t{entry.split()[4]}\tpromoter\n'
     promoter_header = f'>{promoter_entry.replace("\t", "_").strip()}\n'
     promoter_seq = seq[promoter_start : promoter_end]
     if feature.loc.strand == '-':
         promoter_seq = promoter_seq.reverse().complement()
 
-    # 4. Write data to file
-    with open(output_file + '.promoter.mfna', 'a') as mfna_file:
+    promoter_path = output_base.with_suffix(output_base.suffix + '.promoter.mfna')
+    with promoter_path.open('a') as mfna_file:
         mfna_file.write(promoter_header)
         mfna_file.write(str(promoter_seq) + '\n')
 
@@ -399,16 +449,19 @@ def main():
     # 1. Initialise argument parser and read command line arguments
     parser = setup_parser()
     args = parser.parse_args()
-
+        
     # 2. Validation of the neighbourhood specification (x,y or x:y)
-    validate_neighbors(args.neighbours)
+    validate_neighbours(args.neighbours)
 
     # 3. Checking the required input file
     if args.input_type != 'from_gff' and not args.hit_file:
         parser.error(f'--hit_file is required for input_type={args.input_type}')
 
     # 4. Read genome annotation
-    gff_features = read_fts(args.gff_file, fmt='gff').select(args.including_features)
+    raw_gff = read_fts(args.gff_file, fmt='gff')
+    gff_features = raw_gff.select(args.including_features)
+    from collections import Counter
+    print("All types in GFF:", Counter(getattr(f, 'type', None) for f in raw_gff))
 
     # 5. Read genome sequence
     seqs = read(args.fna_file)
@@ -433,8 +486,3 @@ def main():
 
 if __name__ == '__main__':
     main()
-
-"""
-TODO:
-The current logic in get_neighbor_features for “x:y” (nucleotides) is incomplete. It should take into account the boundaries of the genome or not?
-"""
