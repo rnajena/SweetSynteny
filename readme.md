@@ -54,7 +54,14 @@ The pipeline is written in Nextflow. In order to run `SweetSynteny`, I recommend
    ```bash
    nextflow pull rnajena/SweetSynteny
    ```
-6.  Done!
+6. Get DB
+   Download: https://ftp.ebi.ac.uk/pub/databases/Pfam/current_release/Pfam-A.hmm.gz
+   Download: https://ftp.ebi.ac.uk/pub/databases/Rfam/CURRENT/Rfam.cm.gz
+   ```
+   hmmpress /path/to/Pfam-A.hmm
+   cmpress /path/to/Rfam.cm
+   ```
+7.  Done!
 
 ## Usage
 Let us briefly go over the most important parameters and options. 
