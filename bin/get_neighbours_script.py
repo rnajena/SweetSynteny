@@ -485,8 +485,4 @@ def main():
     print("\n Done!")
 
 if __name__ == '__main__':
-<<<<<<< HEAD
     main()
-=======
-    main()
->>>>>>> 670fee0858c4ff7c52011902a271b3ba90d047dc
