@@ -40,12 +40,11 @@ The pipeline is written in Nextflow. In order to run `SweetSynteny`, I recommend
 1. Install [miniconda](https://docs.conda.io/projects/miniconda/en/latest/) or [conda]()
 2. Create a conda environment and install NextFlow within this environment and install everything else.
     ```bash
-    conda create -n nextflow -c bioconda nextflow
-    conda activate nextflow
-    conda install bioconda::infernal
-    conda install bioconda::blast
-    conda install bioconda::mmseq
-    conda install -c conda-forge matplotlib pandas platformdirs pytest requests seaborn
+    mamba create -n env_name
+    conda activate env_name
+    mamba install -c conda-forge -c bioconda   nextflow openjdk   \
+        infernal blast mmseqs2   \
+        matplotlib pandas platformdirs pytest requests seaborn numpy scipy scikit-learn
     ```
 3. sugar
    ```
