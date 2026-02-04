@@ -12,9 +12,11 @@ color_clusters_script.py \
 """
 import argparse
 import colorsys
-from matplotlib import cm
 import csv
+import matplotlib
+matplotlib.use('Agg')  # This tells Matplotlib NOT to use Qt/X11
 import matplotlib.pyplot as plt
+from matplotlib import cm
 import numpy as np
 import os
 import pandas as pd

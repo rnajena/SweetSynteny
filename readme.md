@@ -8,17 +8,19 @@ Microsynteny, the conservation of gene order and orientation within small genomi
 Key features of SweetSynteny:
 - Flexible input:
     1. different number of organisms (from bacteria to eukaryotes)
-    2. different searches (`cmsearch` for sRNA or `blast` for protein)
+    2. different searches (`cmsearch` for sRNA or `blast` for protein or with the gff files `from_gff`)
+- Data filtering (E-value, hit length)
 - Sequence-driven clustering and color-pattern Microsynteny clustering
-    1. on sequence / structur level (-> see Table): `mmseq easy lineclust` or `cmscan`
-    2. on microsynteny level: `dendrogram`
-    3. on global level: umap comparing microsynteny cluster
+    1. on sequence / structur level: `mmseq easy lineclust` or `cmscan` or `hmmscan` (see table)
+    3. pca for dimension reduction
+    2. on microsynteny level: on global level: microsynteny cluster by ward or dbscan 
 - Comprehensive results:
-    1. phylogenetic trees using `dendrogram` build by scipy.cluster.hierarchy
-    2. statistical summaries
+    1. phylogenetic trees using `dendrogram` build by scipy.cluster.hierarchy or scatterplot
+    2. statistical summaries of adjacent genes and genome location
     3. microsynteny plots
     4. statistics on the similarity of the microsynteny locations, e.g. cosinus similarity
-    5. Optional: get gene of interest sequence and its promoter sequence (default: 100 nt upstream)
+    5. Optional: get gene of interest sequence and its promoter sequence (default: 100 nt upstream or up to the next adjacent gene)
+- Implementation: Nextflow
 
 | Conitig:Counter | Gene Name          | Start  | Stop   | Strand| Bio_type       | Color   |
 |-----------------|--------------------|--------|--------|-------|----------------|---------|
@@ -33,16 +35,16 @@ So, as you can see, with SweetSynteny, your Microsynteny analysis will be, well.
 ![Workflow graph](/fig/workflow.2.png)
 
 ## Dependencies and installation
+
 The pipeline is written in Nextflow. In order to run `SweetSynteny`, I recommend creating a conda environment dedicated for NextFlow.
 1. Install [miniconda](https://docs.conda.io/projects/miniconda/en/latest/) or [conda]()
 2. Create a conda environment and install NextFlow within this environment and install everything else.
     ```bash
-    conda create -n nextflow -c bioconda nextflow
-    conda activate nextflow
-    conda install bioconda::infernal
-    conda install bioconda::blast
-    conda install bioconda::mmseq
-    conda install -c conda-forge matplotlib pandas platformdirs pytest requests seaborn
+    mamba create -n env_name
+    conda activate env_name
+    mamba install -c conda-forge -c bioconda   nextflow openjdk   \
+        infernal blast mmseqs2   \
+        matplotlib pandas platformdirs pytest requests seaborn numpy scipy scikit-learn
     ```
 3. sugar
    ```
@@ -57,11 +59,13 @@ The pipeline is written in Nextflow. In order to run `SweetSynteny`, I recommend
 ## Usage
 Let us briefly go over the most important parameters and options. 
 
-<samp>types infernal|blastn|blastp|tblastn </samp>
+<samp>search_types infernal|blastn|blastp|tblastn </samp>
 
 - For protein(s) we recommended a (m)fasta of amino acid sequences and tblastn
 - For sRNA(s) we recommend a corresponding CM from RFAM or self-built\
 - You have the choice
+
+<samp>bio_type ncRNA|protein </samp>
 
 <samp>genomes_dir FOLDER </samp> 
 
@@ -97,18 +101,19 @@ Let us briefly go over the most important parameters and options.
 
 - Name of the gene of interest
 
-<samp>cluster_level sequence_level | structur_level </samp>
+<samp>adjacent_gene_clustering hmmscan,cmscan | mmseq,cmscan | hmmscan,mmseq | mmseq,mmseq </samp>
 
-- Chose clustering
+- Chose clustering for adjacent genes
 
 <samp>neighbours x:y | x-y </samp>
 
 - Set numbers of neighbours (:) or number of nucleotides (-)
 - x and y should be Integer numbers
+- It is also possible for e.g. ribsowitches to write 0,4 and only focus on the downstream genes.
 
 <samp>scale yes | no </samp> 
 
-- Chose if you want to scale the microsynteny plots
+- Chose if you want to scaled and aligned the microsynteny plots
 
 <samp>cluster >2 </samp>
 
@@ -118,11 +123,39 @@ Let us briefly go over the most important parameters and options.
 
 - Select a similarity threshold for clustering
 
+<samp> cut_height_args float </samp>
+
+- Cutting threshold for ward clustering
+ 
 <samp>pfam_db : /path/to/result/folder/Pfam-A.hmm</samp>
+
+- pls, download the pfam db and call ... 
 
 <samp>rfam_db : /path/to/result/folder/Rfam.cm</samp>
 
-<samp>name_file" : ""</samp>
+- pls, download the rfam db and call ... 
+
+<samp>name_file : ""</samp>
+
+- Path to genome name file
+- It should look like this:
+
+| strain          | contig               | organism_name                                      |
+|-----------------|----------------------|----------------------------------------------------|
+| GCF_000731315.1 | NZ_HG938354.1        | Neorhizobium galegae bv. orientalis str. HAMBI 540 |
+| GCF_000731315.1 | NZ_HG938353.1        | Neorhizobium galegae bv. orientalis str. HAMBI 540 |
+| GCF_042657465.1 | NZ_JBHSLC010000080.1 | Azospirillum himalayense                           |
+| GCF_042657465.1 | NZ_JBHSLC010000008.1 | Azospirillum himalayense                           |
+| GCF_042657465.1 | NZ_JBHSLC010000094.1 | Azospirillum himalayense                           |
+
+<samp>ignore_overlaps : "True"|"False"</samp>
+- When you know you search hit overlaps with another annotation, but not more than 75%
+
+<samp>substring_search : "True"|"False"</samp>
+- Only when `from_gff`
+- If you want to search for all SRPs but in you gff file you find SRP, bacterial_SRP, etc
+
+<samp>cpu : int</samp>
 
 ### Use a config file.
 
@@ -130,6 +163,10 @@ See example `para.json`
 
 ### Running the pipeline
 `nextflow run SweetSynteny.nf -params-file /SweetSynteny/para.json -c nextflow.config`
+
+### Output interpretation
+
+1. TODO
 
 ### Other tools
 <details><summary>Click here for all citations</summary>
@@ -164,4 +201,3 @@ title = {{SweetSynteny}},
 url = {https://github.com/rnajena/SweetSynteny}
 }
 ```
-

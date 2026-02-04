@@ -1,17 +1,17 @@
 {
-    "types" : "infernal",
+    "search_types" : "infernal", 
+    "bio_type" : "ncRNA",
     "genomes_dir": "/path/to/genome/folders/",
     "annotation_type": ".gff",
     "query": "/path/to/file.cm",
     "output_dir" : "/path/to/result/folder/",
     "gene_of_interest": "name_of_gene_of_interest",
-    "cluster_level" : "sequence_level",
     "neighbours" : "2,2",
     "scale" : "no",
-    "plotting" : "png",
     "cluster" : 2,
     "threshold" :0.3,
     "pfam_db" : "/path/to/result/folder/Pfam-A.hmm",
     "rfam_db" : "/path/to/result/folder/Rfam.cm",
-    "name_file" : ""
+    "name_file" : "",
+    "adjacent_gene_clustering" : "hmmscan,cmscan"
   }
