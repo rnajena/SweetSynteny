@@ -28,10 +28,19 @@ def extract_gene_name(identifier, gene_of_interest):
     
     # Typical pattern: Split by underscore and look for the segment after the contig:index
     # Format: CONTIG:INDEX_GENENAME_START_END_...
-    parts = identifier.split('_')
-    if len(parts) > 1:
+    # 1. Get everything after the colon
+    after_colon = identifier.split(':')[-1]
+
+    # 2. Split that part by underscores
+    parts = after_colon.split('_')
+
+    # 3. The ID starts at index 1
+    #    and ends 4 items from the end (before the coordinates/strand/type)
+    extracted_id = "_".join(parts[1:-4])
+
+    if len(extracted_id) > 1:
         # If the first part contains a colon (the contig), the second part is usually the gene name
-        return parts[1]
+        return extracted_id
     
     return identifier # Fallback to full string if format is unexpected
 
