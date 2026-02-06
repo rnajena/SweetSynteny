@@ -44,7 +44,7 @@ The pipeline is written in Nextflow. In order to run `SweetSynteny`, I recommend
     conda activate env_name
     mamba install -c conda-forge -c bioconda   nextflow openjdk   \
         infernal blast mmseqs2 hmmer   \
-        matplotlib pandas platformdirs pytest requests seaborn numpy scipy scikit-learn
+        biopython matplotlib pandas platformdirs pytest requests seaborn numpy scipy scikit-learn
     ```
 3. sugar
    ```
