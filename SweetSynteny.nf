@@ -43,9 +43,48 @@ log.info """
     """
     .stripIndent(true)
 
+// Process to validate input files
+process validateInputs {
+    errorStrategy 'terminate'
+    cpus 1
+    memory '1GB'
+    input:
+    val genomes_dir
+    val query_file
+    output:
+    val true
+    script:
+    """
+    # Check if genomes directory exists and has subfolders
+    if [ ! -d "${genomes_dir}" ]; then
+        echo "Error: Genomes directory ${genomes_dir} does not exist"
+        exit 1
+    fi
+    
+    genome_count=\$(find "${genomes_dir}" -mindepth 1 -maxdepth 1 -type d | wc -l)
+    if [ \$genome_count -eq 0 ]; then
+        echo "Error: No genome subfolders found in ${genomes_dir}"
+        exit 1
+    fi
+    
+    # Check query file
+    if [ "${params.search_types}" != "from_gff" ] && [ ! -f "${query_file}" ]; then
+        echo "Error: Query file ${query_file} does not exist"
+        exit 1
+    fi
+    
+    echo "Input validation passed"
+    """
+}
+
 // Process to perform sequence search using BLAST or Infernal
 process runSearch {
     publishDir "${params.output_dir}/1_search", mode: 'copy', pattern: '*.tsv'
+    errorStrategy 'retry'
+    maxRetries 3
+    cpus params.cpus
+    memory '4GB'
+    time '1h'
 
     input:
     tuple val(id), path(genome), path(gff)
@@ -65,7 +104,8 @@ process runSearch {
             -subject $genome \\
             -out ${id}.tsv \\
             -outfmt "6 qseqid sseqid bitscore evalue pident length mismatch gapopen qstart qend qlen sstart send sstrand slen qseq sseq" \\
-            -evalue ${params.evalue_threshold_blast}
+            -evalue ${params.evalue_threshold_blast} \\
+            -matrix ${params.blast_matrix}
         """
     else if (params.search_types == 'blastp')
         """
@@ -78,7 +118,8 @@ process runSearch {
             -db $genome \\
             -out ${id}.tsv \\
             -outfmt "6 qseqid sseqid bitscore evalue pident length mismatch gapopen qstart qend qlen sstart send sstrand slen qseq sseq" \\
-            -evalue ${params.evalue_threshold_blast}
+            -evalue ${params.evalue_threshold_blast} \\
+            -matrix ${params.blast_matrix}
         """
     else if (params.search_types == 'tblastn')
         """
@@ -91,7 +132,8 @@ process runSearch {
             -db $genome \\
             -out ${id}.tsv \\
             -outfmt "6 qseqid sseqid bitscore evalue pident length mismatch gapopen qstart qend qlen sstart send sstrand slen qseq sseq" \\
-            -evalue ${params.evalue_threshold_blast}
+            -evalue ${params.evalue_threshold_blast} \\
+            -matrix ${params.blast_matrix}
         """
     else if (params.search_types == 'infernal')
         """
@@ -109,6 +151,11 @@ process runSearch {
 process getNeighbours {
     //publishDir "${params.output_dir}/2_neighbour", mode: 'copy', pattern: '*_{neighbours_output.tsv,neighbours_output.ncrna.mfna,neighbours_output.protein.mfaa}'
     publishDir "${params.output_dir}/2_neighbour/", mode: 'copy'
+    errorStrategy 'retry'
+    maxRetries 2
+    cpus 1
+    memory '2GB'
+    time '30m'
 
     input:
         tuple val(id), 
@@ -121,6 +168,7 @@ process getNeighbours {
         path("${id}.nb.tsv"),          optional: true, emit: tsv
         path("${id}.nb.protein.mfaa"), optional: true, emit: mfaa
         path("${id}.nb.ncrna.mfna"),   optional: true, emit: mfna
+        path("${id}.nb.promoter.mfna"),   optional: true, emit: promoter_mfna
 
     script:
     
@@ -167,14 +215,21 @@ process getNeighbours {
 // MMseqs clustering for Proteins
 process runMMseqsProtein {
     publishDir "${params.output_dir}/3_cluster", mode: 'copy'
+    errorStrategy 'retry'
+    maxRetries 2
+    cpus 4
+    memory '8GB'
+    time '2h'
     input: 
         path protein_mfaa
     output: 
         path "clusterRes.protein_mmseqs.tsv", emit: results
+        path "prot_clust_rep_seq.fasta",     emit: rep_fasta
 
     script:
     """
-    cat ${protein_mfaa} > merged_protein.mfaa
+    sed "/${params.gene_of_interest}/,+1d" ${protein_mfaa} > merged_protein.mfaa
+    #cat ${protein_mfaa} > merged_protein.mfaa
     
     # MMseqs creates prot_clust_cluster.tsv, prot_clust_rep_seq.fasta, and prot_clust_all_seqs.fasta
     mmseqs easy-linclust merged_protein.mfaa prot_clust tmp --min-seq-id 0.3 --cov-mode 1
@@ -190,14 +245,21 @@ process runMMseqsProtein {
 // MMseqs clustering for ncRNA
 process runMMseqsNCRNA {
     publishDir "${params.output_dir}/3_cluster", mode: 'copy'
+    errorStrategy 'retry'
+    maxRetries 2
+    cpus 4
+    memory '8GB'
+    time '2h'
     input: 
         path ncrna_mfna
     output: 
         path "clusterRes.ncrna_mmseqs.tsv", emit: results
+        path "ncrna_clust_rep_seq.fasta",     emit: rep_fasta
 
     script:
     """
-    cat ${ncrna_mfna} > merged_ncrna.mfna
+    sed "/${params.gene_of_interest}/,+1d" ${ncrna_mfna} > merged_ncrna.mfna
+    #cat ${ncrna_mfna} > merged_ncrna.mfna
     
     # MMseqs creates ncrna_clust_cluster.tsv and others
     mmseqs easy-linclust merged_ncrna.mfna ncrna_clust tmp --min-seq-id 0.8 --cov-mode 1
@@ -211,19 +273,24 @@ process runMMseqsNCRNA {
 
 process runHMMscan {
     publishDir "${params.output_dir}/3_cluster", mode: 'copy'
+    errorStrategy 'retry'
+    maxRetries 2
+    cpus 4
+    memory '16GB'
+    time '4h'
     input:
-        path protein_mfaa
+        path rep_fasta   // The representative sequences
+        path mmseqs_map  // The mapping file (results) from MMseqs
     output:
         path "clusterRes.hmm.protein_cluster.tsv", emit: hmm_results
 
     script:
     """
-    cat ${protein_mfaa} > merged_protein.mfaa
-    # Use the merged file 'merged_protein.mfaa' here:
-    hmmscan --tblout merged.protein.hmm.tbl --cpu 10 ${params.pfam_db} merged_protein.mfaa
+    hmmscan --tblout merged.protein.hmm.tbl --cpu 10 ${params.pfam_db} ${rep_fasta}
     
     python ${projectDir}/bin/postprocess_hmmscan.py \\
         --hmmscan_file merged.protein.hmm.tbl \\
+        --mmseqs_map ${mmseqs_map} \\
         --output_file clusterRes.hmm.protein_cluster.tsv \\
         --gene_of_interest ${params.gene_of_interest}
     """
@@ -231,19 +298,24 @@ process runHMMscan {
 
 process runCMscan {
     publishDir "${params.output_dir}/3_cluster", mode: 'copy'
+    errorStrategy 'retry'
+    maxRetries 2
+    cpus 4
+    memory '16GB'
+    time '4h'
     input:
-        path mfna_files // Input variable name
+        path rep_fasta
+        path mmseqs_map
     output:
         path "clusterRes.ncrna_cluster.tsv", emit: cm_results
 
     script:
     """
-    cat ${mfna_files} > merged_ncrna.mfna
-    # Use the merged file 'merged_ncrna.mfna' here:
-    cmscan -E 0.01 --cpu 10 --noali --tblout clusterRes.ncrna ${params.rfam_db} merged_ncrna.mfna
-
+    cmscan -E 0.01 --cpu 10 --noali --tblout clusterRes.ncrna ${params.rfam_db} ${rep_fasta}
+    
     python ${projectDir}/bin/postprocess_cmscan.py \\
         --cmscan_file clusterRes.ncrna \\
+        --mmseqs_map ${mmseqs_map} \\
         --output_file clusterRes.ncrna_cluster.tsv \\
         --gene_of_interest ${params.gene_of_interest}
     """
@@ -252,6 +324,11 @@ process runCMscan {
 // Process for clustering and coloring results
 process clusterColoring {
     publishDir "${params.output_dir}/3_cluster", mode: 'copy'
+    errorStrategy 'retry'
+    maxRetries 1
+    cpus 2
+    memory '4GB'
+    time '1h'
 
     input:
         path cluster_files // This contains [clusterRes.hmm.protein_cluster.tsv, clusterRes.ncrna_cluster.tsv]
@@ -261,6 +338,8 @@ process clusterColoring {
         path 'merged_with_color.tsv', emit: colored_tsv
         path "summary.png"
         path "summary.svg"
+        path "summary.json"
+
 
     script:
     """
@@ -277,45 +356,77 @@ process clusterColoring {
         --cluster_file clusterRes.tsv \\
         --tsv_file merged_neighbours.tsv \\
         --output_file merged_with_color.tsv \\
-        --gene_of_interest ${params.gene_of_interest}
+        --gene_of_interest ${params.gene_of_interest} \\
+        --goi_type ${params.search_types}
     """
 }
 
 // Process for plotting genomic context
 process plottingContext {
     publishDir "${params.output_dir}/4_plot", mode: 'copy'
+    errorStrategy 'retry'
+    maxRetries 1
+    cpus 4
+    memory '8GB'
+    time '2h'
     
     input:
     path merged_with_color
 
     output:
-    path "dbscan"
-    path "ward_cosinus"
-    path "ward_euclidean"
-    path "*_korrelations_heatmap.png"
-    path "*_distribution.png"
     path "clustering_report.txt"
+    path "summary_*.json", emit: json_reports
+    path "density/*.png"
+    path "hierarchical/*.png"
+    path "density/*.tsv"
+    path "hierarchical/*.tsv"
+    path "density/*.svg", optional: true
+    path "hierarchical/*.svg", optional: true
+    path "*.png", optional: true
+    path "*.svg", optional: true
 
     script:
     """
-    mkdir -p dbscan
-    mkdir -p ward_cosinus
-    mkdir -p ward_euclidean
-
-    python ${projectDir}/bin/plot_context_script.py \\
+    mkdir -p density
+    mkdir -p hierarchical
+    
+    echo "Executing Plotting Script with the following command:" > clustering_report.txt
+    echo "python ${projectDir}/bin/plot_context_script.py \\
         --input_file $merged_with_color \\
         --output_path ./ \\
+        --gene_name ${params.gene_name} \\
         --scale ${params.scale} \\
         --cluster ${params.cluster} \\
         --threshold ${params.threshold} \\
         --cut_height_args ${params.cut_height_args} \\
         --gene_of_interest ${params.gene_of_interest} \\
         --name_file ${params.name_file} \\
-        --method ${params.method} > clustering_report.txt 2>&1
+        --microsynteny_logo ${params.microsynteny_logo} \\
+        --svg ${params.svg} \\
+        --goi_type ${params.search_types} \\
+        --metric ${params.metric}"
+
+    python ${projectDir}/bin/plot_context_script.py \\
+        --input_file $merged_with_color \\
+        --output_path ./ \\
+        --gene_name ${params.gene_name} \\
+        --scale ${params.scale} \\
+        --cluster ${params.cluster} \\
+        --threshold ${params.threshold} \\
+        --cut_height_args ${params.cut_height_args} \\
+        --gene_of_interest ${params.gene_of_interest} \\
+        --name_file ${params.name_file} \\
+        --microsynteny_logo ${params.microsynteny_logo} \\
+        --svg ${params.svg} \\
+        --goi_type ${params.search_types} \\
+        --metric ${params.metric} > clustering_report.txt 2>&1
     """
 }
 
 workflow {
+    // Validate inputs first
+    validation_result = validateInputs(params.genomes_dir, params.query)
+    
     // Define the three main data channels
     def tsv_files, mfaa_files, mfna_files
 
@@ -328,7 +439,7 @@ workflow {
         mfna_files = Channel.fromPath("${params.prev_nb_dir}/*.nb.ncrna.mfna").collect()
 
     } else {
-        // --- ORIGINAL SEARCH/NEIGHBOUR LOGIC ---
+        // --- SEARCH/NEIGHBOUR LOGIC ---
         genome_gff_pairs = Channel
             .fromPath("${params.genomes_dir}/*", type: 'dir')
             .map { subfolder -> 
@@ -338,6 +449,10 @@ workflow {
             }
             .filter { it != null }
 
+        if (genome_gff_pairs.count() == 0) {
+            error "No valid genome folders found in ${params.genomes_dir}. Each folder must contain .fasta/.fna and .gff files."
+        }
+
         if (params.search_types == 'from_gff') {
             ready_for_neighbours = genome_gff_pairs.map { id, fna, gff -> 
                 tuple(id, fna, gff, params.gene_of_interest) 
@@ -345,6 +460,9 @@ workflow {
         } else {
             search_results = runSearch(genome_gff_pairs)
             ready_for_neighbours = search_results.filter { id, g, gf, res -> res.size() > 0 }
+            if (ready_for_neighbours.count() == 0) {
+                error "No search results found. Check query file and parameters."
+            }
         }
 
         neighbour_results = getNeighbours(ready_for_neighbours)
@@ -354,20 +472,26 @@ workflow {
         mfna_files = neighbour_results.mfna.collect()
     }
 
-    // --- CLUSTERING LOGIC (Remains the same, but uses the channels defined above) ---
+    // --- CLUSTERING LOGIC ---
     def tools = params.adjacent_gene_clustering.split(',')
     def protein_tool = tools[0]
     def ncrna_tool   = tools[1]
     def clustering_results_ch = Channel.empty()
 
     if (protein_tool == 'hmmscan') {
-        clustering_results_ch = clustering_results_ch.mix(runHMMscan(mfaa_files).hmm_results)
+        mmseqs_prot_out = runMMseqsProtein(mfaa_files)
+        hmm_out = runHMMscan(mmseqs_prot_out.rep_fasta, mmseqs_prot_out.results)
+        clustering_results_ch = clustering_results_ch.mix(hmm_out.hmm_results)
+        //clustering_results_ch = clustering_results_ch.mix(runHMMscan(mfaa_files).hmm_results)
     } else if (protein_tool == 'mmseqs') {
         clustering_results_ch = clustering_results_ch.mix(runMMseqsProtein(mfaa_files).results)
     }
 
     if (ncrna_tool == 'cmscan') {
-        clustering_results_ch = clustering_results_ch.mix(runCMscan(mfna_files).cm_results)
+        mmseqs_ncrna_out = runMMseqsNCRNA(mfna_files)
+        cm_out = runCMscan(mmseqs_ncrna_out.rep_fasta, mmseqs_ncrna_out.results)
+        clustering_results_ch = clustering_results_ch.mix(cm_out.cm_results)
+        //clustering_results_ch = clustering_results_ch.mix(runCMscan(mfna_files).cm_results)
     } else if (ncrna_tool == 'mmseqs') {
         clustering_results_ch = clustering_results_ch.mix(runMMseqsNCRNA(mfna_files).results)
     }
@@ -376,4 +500,19 @@ workflow {
     colored_ch = clusterColoring(combined_clusters_ch, tsv_files)
     plottingContext(colored_ch.colored_tsv)
 }
+
+workflow.onError {
+    log.error "Pipeline failed with error: ${workflow.errorMessage}"
+    log.error "Check the work directory for failed tasks: ${workflow.workDir}"
+}
+
+workflow.onComplete {
+    if (workflow.success) {
+        log.info "Pipeline completed successfully!"
+        log.info "Results are in: ${params.output_dir}"
+    } else {
+        log.error "Pipeline failed. Check logs above."
+    }
+}
+
 log.info "Pipeline completed at: $workflow.complete"
