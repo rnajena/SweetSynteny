@@ -1,11 +1,17 @@
 # (C) 2024, Maria Schreiber, MIT license
 import argparse
+import logging
 from pathlib import Path
 from sugar import read_fts, read, Feature
+from Bio.Seq import Seq
+
+# Set up logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
 
 OUTPUT_FILES = {
-    'protein': ('.protein.mfaa', True),
-    'ncrna': ('.ncrna.mfna', False),
+    'protein': ('.protein.mfaa'),
+    'ncrna': ('.ncrna.mfna'),
 }
 
 FEATURE_TO_OUTPUT_TYPE = {
@@ -29,6 +35,19 @@ def validate_neighbours(neighbours):
     """Ensure the neighbours parameter is formatted correctly."""
     if ',' not in neighbours and ':' not in neighbours:
         raise ValueError('Invalid neighbours format. Use x,y or x:y')
+
+    separator = ',' if ',' in neighbours else ':'
+    parts = neighbours.split(separator)
+    if len(parts) != 2:
+        raise ValueError('Invalid neighbours format. Use x,y or x:y')
+
+    try:
+        up, down = map(int, parts)
+    except ValueError:
+        raise ValueError('Neighbours values must be integers.')
+
+    if up < 0 or down < 0:
+        raise ValueError('Neighbour values must be non-negative.')
 
 def setup_parser():
     """Configure command-line argument parser."""
@@ -214,11 +233,8 @@ def process_neighborhood(args, merged_features, seqs):
                     if args.gene_of_interest == target_value:
                         is_gene_of_interest = True
         else:
-            if args.input_type.replace("tblastn","blast") == feature.meta._fmt:
-                is_gene_of_interest = True
-            if args.input_type.replace("blastn","blast") == feature.meta._fmt:
-                is_gene_of_interest = True
-            if args.input_type.replace("blastp","blast") == feature.meta._fmt:
+            feature_fmt = getattr(feature.meta, '_fmt', '').lower()
+            if feature_fmt in {'blast', 'blastn', 'blastp', 'tblastn', 'infernal'}:
                 is_gene_of_interest = True
 
         # 2. Check if we have already processed this specific genomic spot
@@ -240,24 +256,31 @@ def process_neighborhood(args, merged_features, seqs):
         if is_gene_of_interest and not is_duplicate_location:
 
             neighbours = get_neighbor_features(merged_features, idx, args.neighbours, args.overlap_threshold, args.ignore_overlaps)
+            processed_this_feature = False
+
             if neighbours:
                 for neighbor in neighbours:
                     entry = generate_entry(neighbor, counter, args)
                     write_neighbour_data(
                         neighbor, entry, args.output_path, seqs, args.input_type, args.bio_type, args.gene_of_interest
                     )
-                
-                # Mark this location as processed
-                processed_locations.add(location_key)
-                counter += 1
-            # inside the loop where you call extract_and_save_promoter_regions
+                processed_this_feature = True
+
             if args.promoter == 'yes':
                 coords = get_promoter_coords(feature, merged_features, args.promoter_len, args.promoter_mode)
                 if coords:
                     start_pos, end_pos = coords
                     seq = seqs.d.get(feature.seqid)
                     if seq:
-                        extract_and_save_promoter_regions(args, feature, seq, entry, start_pos, end_pos, Path(args.output_path))
+                        center_entry = generate_entry(feature, counter, args)
+                        extract_and_save_promoter_regions(
+                            args, feature, seq, center_entry, start_pos, end_pos, Path(args.output_path)
+                        )
+                        processed_this_feature = True
+
+            if processed_this_feature:
+                processed_locations.add(location_key)
+                counter += 1
 
 def check_overlap(center, overlaps, overlap_threshold):
     """ Only keep overlaps if the overlap covers >75% of both the center and the neighbor, or if they are on opposite strands. """
@@ -354,6 +377,7 @@ def write_neighbour_data(feature, entry, output_path, seqs, input_type, bio_type
     """ Write the neighbor's sequence and annotation to the appropriate output files. """
     
     base_path = Path(output_path)
+    base_path.parent.mkdir(parents=True, exist_ok=True)
 
     # Try to get the sequence by dict or fallback to list
     seq = seqs.d.get(feature.seqid)
@@ -365,11 +389,11 @@ def write_neighbour_data(feature, entry, output_path, seqs, input_type, bio_type
         if not seq:
             raise KeyError(f"Sequence for {feature.seqid} not found.")
 
-    translate = True
+    should_translate = True
     # Extract the correct sequence slice
     if input_type == 'tblastn' and feature.meta._fmt == 'blast':
         seq_slice = feature.meta._blast.sseq.replace("_","").replace("-","")
-        translate = False
+        should_translate = False
     else:
         seq_slice = seq[feature.loc.start:feature.loc.stop]
         if feature.loc.strand == '-':
@@ -387,7 +411,7 @@ def write_neighbour_data(feature, entry, output_path, seqs, input_type, bio_type
     output_type = FEATURE_TO_OUTPUT_TYPE.get(bio_type)
 
     if output_type and output_type in OUTPUT_FILES:
-        suffix, should_translate = OUTPUT_FILES[output_type]
+        suffix = OUTPUT_FILES[output_type]
         # Creat outputpath
         output_file_path = str(base_path) + suffix
         
@@ -398,7 +422,8 @@ def write_neighbour_data(feature, entry, output_path, seqs, input_type, bio_type
             if output_type == 'protein' and should_translate:
                 # Translate Biotyp 
                 content = seq_slice.translate(check_start=False, complete=False)
-
+            else: 
+                content = seq_slice
             out_file.write(f'{content}\n')
 
 def get_promoter_coords(center, features, promoter_len, mode='fixed'):
@@ -446,43 +471,52 @@ def extract_and_save_promoter_regions(args, feature, seq, entry, promoter_start,
         mfna_file.write(str(promoter_seq) + '\n')
 
 def main():
-    # 1. Initialise argument parser and read command line arguments
-    parser = setup_parser()
-    args = parser.parse_args()
+    try:
+        # 1. Initialise argument parser and read command line arguments
+        parser = setup_parser()
+        args = parser.parse_args()
+            
+        # 2. Validation of the neighbourhood specification (x,y or x:y)
+        validate_neighbours(args.neighbours)
+        logger.info(f"Processing gene of interest: {args.gene_of_interest}")
+
+        # 3. Checking the required input file
+        if args.input_type != 'from_gff' and not args.hit_file:
+            parser.error(f'--hit_file is required for input_type={args.input_type}')
+
+        # 4. Read genome annotation
+        logger.info("Reading GFF file...")
+        raw_gff = read_fts(args.gff_file, fmt='gff')
+        gff_features = raw_gff.select(args.including_features)
+        from collections import Counter
+        logger.info(f"All types in GFF: {Counter(getattr(f, 'type', None) for f in raw_gff)}")
+
+        # 5. Read genome sequence
+        logger.info("Reading genome sequence...")
+        seqs = read(args.fna_file)
+
+        # 6. Case differentiation based on input type
+        # Case A: Input is a hit report (BLAST/Infernal)
+        if args.input_type in ['blastn', 'blastp', 'infernal', 'tblastn']:
+            # Read and filter hit file using user-specified thresholds
+            logger.info("Processing hit file...")
+            features_of_gene_of_interest = process_hits(args.hit_file, args.input_type, args.gene_of_interest, args)
+            # Remove overlapping hits
+            features_of_gene_of_interest = remove_overlapping_features(features_of_gene_of_interest)        
+            # Merge BLAST/infernal hits and annotation features
+            merged = sorted(list(features_of_gene_of_interest) + list(gff_features), key=lambda x: x.loc.start)
+            # Start finding the neighbours for each gene of interest
+            process_neighborhood(args, merged, seqs)
+        # Case B: Input is directly a GFF feature (e.g. by ID or product name)
+        elif args.input_type == 'from_gff':
+            # Since no hits need to be processed, the analysis is started directly with the GFF features.
+            logger.info("Processing from GFF...")
+            process_neighborhood(args, gff_features, seqs)
         
-    # 2. Validation of the neighbourhood specification (x,y or x:y)
-    validate_neighbours(args.neighbours)
-
-    # 3. Checking the required input file
-    if args.input_type != 'from_gff' and not args.hit_file:
-        parser.error(f'--hit_file is required for input_type={args.input_type}')
-
-    # 4. Read genome annotation
-    raw_gff = read_fts(args.gff_file, fmt='gff')
-    gff_features = raw_gff.select(args.including_features)
-    from collections import Counter
-    print("All types in GFF:", Counter(getattr(f, 'type', None) for f in raw_gff))
-
-    # 5. Read genome sequence
-    seqs = read(args.fna_file)
-
-    # 6. Case differentiation based on input type
-    # Case A: Input is a hit report (BLAST/Infernal)
-    if args.input_type in ['blastn', 'blastp', 'infernal', 'tblastn']:
-        # Read and filter hit file using user-specified thresholds
-        features_of_gene_of_interest = process_hits(args.hit_file, args.input_type, args.gene_of_interest, args)
-        # Remove overlapping hits
-        features_of_gene_of_interest = remove_overlapping_features(features_of_gene_of_interest)        
-        # Merge BLAST/infernal hits and annotation features
-        merged = sorted(list(features_of_gene_of_interest) + list(gff_features), key=lambda x: x.loc.start)
-        # Start finding the neighbours for each gene of interest
-        process_neighborhood(args, merged, seqs)
-    # Case B: Input is directly a GFF feature (e.g. by ID or product name)
-    elif args.input_type == 'from_gff':
-        # Since no hits need to be processed, the analysis is started directly with the GFF features.
-        process_neighborhood(args, gff_features, seqs)
-    
-    print("\n Done!")
+        logger.info("Processing completed successfully!")
+    except Exception as e:
+        logger.error(f"An error occurred: {str(e)}")
+        raise
 
 if __name__ == '__main__':
     main()
