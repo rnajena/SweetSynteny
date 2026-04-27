@@ -3,7 +3,9 @@ This pipeline is work-in-progress, you might fing bugs, some are known, while ot
 
 ***
 # SweetSynteny - Unraveling Microsynteny Patterns
-Microsynteny, the conservation of gene order and orientation within small genomic regions across different species, provides crucial insights into evolutionary relationships and functional conservation. 
+SweetSynteny identifies microsynteny patterns (conservation of gene order and orientation within small genomic regions) across genomes by combining sequence-based clustering, gene-context analysis, and visualization. It supports both protein and non-coding RNA searches and produces phylogenetic, cluster, and neighborhood summaries.
+
+Microsynteny provides crucial insights into evolutionary relationships and functional conservation. 
 
 Key features of SweetSynteny:
 - Flexible input:
@@ -43,8 +45,8 @@ The pipeline is written in Nextflow. In order to run `SweetSynteny`, I recommend
     mamba create -n env_name
     conda activate env_name
     mamba install -c conda-forge -c bioconda   nextflow openjdk   \
-        infernal blast mmseqs2 hmmer   \
-        biopython matplotlib pandas platformdirs pytest requests seaborn numpy scipy scikit-learn
+        infernal blast mmseqs2   \
+        matplotlib pandas platformdirs pytest requests seaborn numpy scipy scikit-learn
     ```
 3. sugar
    ```
@@ -54,29 +56,11 @@ The pipeline is written in Nextflow. In order to run `SweetSynteny`, I recommend
    ```bash
    nextflow pull rnajena/SweetSynteny
    ```
-6. Get DB
-   Download: https://ftp.ebi.ac.uk/pub/databases/Pfam/current_release/Pfam-A.hmm.gz
-   Download: https://ftp.ebi.ac.uk/pub/databases/Rfam/CURRENT/Rfam.cm.gz
-   ```
-   hmmpress /path/to/Pfam-A.hmm
-   cmpress /path/to/Rfam.cm
-   ```
-7.  Done!
+6.  Done!
 
-## Usage
-Let us briefly go over the most important parameters and options. 
+## Input layout
 
-<samp>search_types infernal|blastn|blastp|tblastn </samp>
-
-- For protein(s) we recommended a (m)fasta of amino acid sequences and tblastn
-- For sRNA(s) we recommend a corresponding CM from RFAM or self-built\
-- You have the choice
-
-<samp>bio_type ncRNA|protein </samp>
-
-<samp>genomes_dir FOLDER </samp> 
-
-- Please choose 2 or more genomes you want to search and save them here.
+Please choose 2 or more genomes you want to search and save them here. Prepare a genome directory containing one subdirectory per genome. Each genome folder should include a GFF annotation file and a FASTA genome file.
 - And use following structure:
   
     └── genomes_dir
@@ -93,6 +77,24 @@ Let us briefly go over the most important parameters and options.
   
         .    └── db.fna
     ...
+
+## Usage
+
+Let us briefly go over the most important parameters and options. 
+
+```bash
+nextflow run SweetSynteny.nf -params-file /path/to/para.json -c nextflow.config
+```
+
+<samp>search_types infernal|blastn|blastp|tblastn </samp>
+
+- For protein(s) we recommended a (m)fasta of amino acid sequences and tblastn
+- For sRNA(s) we recommend a corresponding CM from RFAM or self-built\
+- You have the choice
+
+<samp>bio_type ncRNA|protein </samp>
+
+<samp>genomes_dir FOLDER </samp> 
 
 <samp>annotation_type .gff | other_types_for_futur </samp>
 
@@ -114,7 +116,7 @@ Let us briefly go over the most important parameters and options.
 
 <samp>neighbours x:y | x-y </samp>
 
-- Set numbers of neighbours (:) or number of nucleotides (-)
+- Set numbers of neighbours ( : ) or number of nucleotides ( - )
 - x and y should be Integer numbers
 - It is also possible for e.g. ribsowitches to write 0,4 and only focus on the downstream genes.
 
@@ -168,12 +170,15 @@ Let us briefly go over the most important parameters and options.
 
 See example `para.json`
 
-### Running the pipeline
-`nextflow run SweetSynteny.nf -params-file /SweetSynteny/para.json -c nextflow.config`
-
 ### Output interpretation
 
-1. TODO
+SweetSynteny generates:
+
+- cluster and microsynteny summary tables
+- gene neighborhood tables
+- phylogenetic trees and scatterplots
+- statistical summaries of adjacent genes and genome locations
+- `summary.png`, `summary.svg`, and `summary.json`
 
 ### Other tools
 <details><summary>Click here for all citations</summary>
