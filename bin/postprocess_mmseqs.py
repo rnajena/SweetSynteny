@@ -9,6 +9,7 @@ postprocess_mmseqEasyLinclust.py \
 """
 import csv
 import argparse
+import os
 
 def setup_parser():
     parser = argparse.ArgumentParser(description='Postprocessing MMseqs2 clustering for SweetSynteny')
@@ -16,6 +17,19 @@ def setup_parser():
     parser.add_argument('-o', '--output', required=True, help='Path for output mapping file')
     parser.add_argument('-gof', '--gene_of_interest', required=True, help='Name of gene of interest (e.g., CrfA)')
     return parser
+
+
+def ensure_input_file(path):
+    if not os.path.exists(path):
+        raise FileNotFoundError(f'Input file not found: {path}')
+    if not os.path.isfile(path):
+        raise ValueError(f'Expected a file but found: {path}')
+
+
+def ensure_output_dir(path):
+    output_dir = os.path.dirname(path)
+    if output_dir and not os.path.exists(output_dir):
+        os.makedirs(output_dir, exist_ok=True)
 
 def extract_gene_name(identifier, gene_of_interest):
     """
@@ -25,24 +39,21 @@ def extract_gene_name(identifier, gene_of_interest):
     """
     if gene_of_interest in identifier:
         return gene_of_interest
-    
-    # Typical pattern: Split by underscore and look for the segment after the contig:index
-    # Format: CONTIG:INDEX_GENENAME_START_END_...
-    # 1. Get everything after the colon
-    after_colon = identifier.split(':')[-1]
 
-    # 2. Split that part by underscores
+    # Try to extract the gene name from the sequence identifier.
+    after_colon = identifier.split(':')[-1]
     parts = after_colon.split('_')
 
-    # 3. The ID starts at index 1
-    #    and ends 4 items from the end (before the coordinates/strand/type)
-    extracted_id = "_".join(parts[1:-4])
+    if len(parts) >= 6:
+        # Use the segment(s) between the contig index and the coordinates
+        extracted_id = '_'.join(parts[1:-4])
+        if extracted_id:
+            return extracted_id
 
-    if len(extracted_id) > 1:
-        # If the first part contains a colon (the contig), the second part is usually the gene name
-        return extracted_id
-    
-    return identifier # Fallback to full string if format is unexpected
+    if len(parts) >= 2:
+        return parts[1]
+
+    return after_colon if after_colon else identifier
 
 def process_mmseqs(input_file, output_file, gene_of_interest):
     with open(input_file, 'r') as f_in, open(output_file, 'w', newline='') as f_out:
@@ -65,7 +76,10 @@ def process_mmseqs(input_file, output_file, gene_of_interest):
 def main():
     parser = setup_parser()
     args = parser.parse_args()
-    
+
+    ensure_input_file(args.input)
+    ensure_output_dir(args.output)
+
     process_mmseqs(args.input, args.output, args.gene_of_interest)
 
 if __name__ == '__main__':
