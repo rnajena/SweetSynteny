@@ -1,5 +1,5 @@
 # WORK IN PROGRESS
-This pipeline is work-in-progress, you might fing bugs, some are known, while others remain undiscovered. Before getting desperate, please check out the Issues that are already opened and discussed. We encourage the community to contribute by reporting any issues they encounter on GitHub. Feel free to reach out to me via email (maria.schreiber@uni-jena.de) or open an issue directly. It's important to note that I cannot be held responsible for any results obtained using SweetSynteny or any conclusions drawn from them.
+This pipeline is work-in-progress, you might find bugs, some are known, while others remain undiscovered. Before getting desperate, please check out the Issues that are already opened and discussed. We encourage the community to contribute by reporting any issues they encounter on GitHub. Feel free to reach out to me via email (maria.schreiber@uni-jena.de) or open an issue directly. It's important to note that I cannot be held responsible for any results obtained using SweetSynteny or any conclusions drawn from them.
 
 ***
 # SweetSynteny - Unraveling Microsynteny Patterns
@@ -24,7 +24,7 @@ Key features of SweetSynteny:
     5. Optional: get gene of interest sequence and its promoter sequence (default: 100 nt upstream or up to the next adjacent gene)
 - Implementation: Nextflow
 
-| Conitig:Counter | Gene Name          | Start  | Stop   | Strand| Bio_type       | Color   |
+| Contig:Counter | Gene Name          | Start  | Stop   | Strand| Bio_type       | Color   |
 |-----------------|--------------------|--------|--------|-------|----------------|---------|
 | NZ_CP013002.1:0 | gene-AQ619_RS00960 | 215167 | 216307 | sense | protein_coding | #FFFFFF |
 
@@ -112,21 +112,21 @@ nextflow run SweetSynteny.nf -params-file /path/to/para.json -c nextflow.config
 
 <samp>adjacent_gene_clustering hmmscan,cmscan | mmseq,cmscan | hmmscan,mmseq | mmseq,mmseq </samp>
 
-- Chose clustering for adjacent genes
+- Choose clustering for adjacent genes
 
 <samp>neighbours x:y | x-y </samp>
 
 - Set numbers of neighbours ( : ) or number of nucleotides ( - )
 - x and y should be Integer numbers
-- It is also possible for e.g. ribsowitches to write 0,4 and only focus on the downstream genes.
+- It is also possible for e.g. riboswitches to write 0,4 and only focus on the downstream genes.
 
 <samp>scale yes | no </samp> 
 
-- Chose if you want to scaled and aligned the microsynteny plots
+- Choose if you want to scaled and aligned the microsynteny plots
 
 <samp>cluster >2 </samp>
 
-- Chose minimal cluster size for `DBscan` clustering
+- Choose minimal cluster size for `DBscan` clustering
 
 <samp>threshold 0-1 </samp>
 
@@ -138,11 +138,11 @@ nextflow run SweetSynteny.nf -params-file /path/to/para.json -c nextflow.config
  
 <samp>pfam_db : /path/to/result/folder/Pfam-A.hmm</samp>
 
-- pls, download the pfam db and call ... 
+- please, download the pfam db and call ... 
 
 <samp>rfam_db : /path/to/result/folder/Rfam.cm</samp>
 
-- pls, download the rfam db and call ... 
+- please, download the rfam db and call ... 
 
 <samp>name_file : ""</samp>
 
