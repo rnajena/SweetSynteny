@@ -1,5 +1,6 @@
 # (C) 2024, Maria Schreiber, MIT license
 import os
+import sys
 import argparse
 import json
 import logging
@@ -205,8 +206,8 @@ def cluster_genomes_func(df, output_path, metric='cosine'):
         plt.xlabel('Principal Components')
         plt.legend(loc='best')
         plt.title(f'Variance Distribution')
-        plt.savefig(f'{output_path}/{label}_variance_screen_plot.png')
-        plt.savefig(f'{output_path}/{label}_variance_screen_plot.svg')
+        plt.savefig(f'{output_path}/variance_screen_plot.png')
+        plt.savefig(f'{output_path}/variance_screen_plot.svg')
         plt.close()
 
     def optimize_hdbscan(X, min_cluster_range=range(2, 10), metric='jaccard'):
@@ -474,12 +475,80 @@ def cluster_genomes_func(df, output_path, metric='cosine'):
     row_colors = pd.Series(h_labels, index=X_cluster.index).map(lut) 
     data_to_plot = feature_matrix.loc[X_cluster.index]
     
+    # Clean data for clustering: remove NaN values and constant columns
+    data_to_plot = data_to_plot.fillna(0)  # Replace NaN with 0
+    data_to_plot = data_to_plot.loc[:, (data_to_plot != 0).any(axis=0)]  # Remove all-zero columns
+    data_to_plot = data_to_plot.loc[:, data_to_plot.std(axis=0) > 0]  # Remove constant columns
+    
+    if data_to_plot.shape[1] == 0:
+        logger.warning("No variable gene columns remain after cleaning. Skipping clustermap.")
+        return {
+            'hierarchical': hierarchical_series, 
+            'density': density_series,
+        }, feature_matrix
+    
     # 1. MANUALLY CALCULATE REORDERING TO BYPASS RECURSION CRASH
     # This computes the leaf order without drawing the full recursive tree
-    # 1. Generate standalone dendrogram
+    # 1. Generate standalone dendrogram with colored branches
     plt.figure(figsize=(12, 8))
+    reordered_idx = np.arange(len(data_to_plot))
     try:
-        dendro_result = sch.dendrogram(row_linkage, labels=data_to_plot.index.astype(str), leaf_font_size=8, leaf_rotation=90)
+        # Temporarily increase recursion limit for large dendrograms.
+        orig_recursion_limit = sys.getrecursionlimit()
+        sys.setrecursionlimit(max(orig_recursion_limit, 100000000))
+
+        # Get dendrogram structure without plotting
+        dendro_result = sch.dendrogram(row_linkage, labels=data_to_plot.index.astype(str), 
+                                      leaf_font_size=0, no_plot=True)
+        
+        # Now manually plot dendrogram with colored branches
+        ax = plt.gca()
+        
+        # Color branches based on cluster membership
+        # dendro_result['icoord'] contains x-coordinates, 'dcoord' contains y-coordinates
+        # Each line segment connects leaves or clusters
+        leaf_clusters = h_labels[dendro_result['leaves']]  # Get cluster for each leaf
+        
+        for i, (xi, yi) in enumerate(zip(dendro_result['icoord'], dendro_result['dcoord'])):
+            # xi contains [left_x, left_x, right_x, right_x], yi contains [bottom, top, top, bottom]
+            # Determine which leaves this segment connects
+            left_x, right_x = xi[0], xi[2]
+            
+            # Map x-coordinates to leaf indices
+            # Leaves are at positions 5, 15, 25, ... (multiples of 10)
+            left_leaf_idx = int(left_x / 10)
+            right_leaf_idx = int(right_x / 10)
+            
+            # Get clusters for these leaves
+            if left_leaf_idx < len(dendro_result['leaves']) and right_leaf_idx < len(dendro_result['leaves']):
+                left_cluster = leaf_clusters[left_leaf_idx]
+                right_cluster = leaf_clusters[right_leaf_idx]
+                
+                # Color branch based on cluster: same cluster = cluster color, different = black
+                if left_cluster == right_cluster:
+                    branch_color = lut.get(left_cluster, (0, 0, 0))
+                else:
+                    branch_color = 'gray'  # Different clusters = gray
+            else:
+                branch_color = 'gray'
+            
+            # Draw the line segment with appropriate color
+            ax.plot(xi, yi, color=branch_color, linewidth=1.5)
+        
+        # Set x-axis labels with cluster colors
+        leaf_labels = dendro_result['leaves']
+        leaf_label_names = [data_to_plot.index[leaf_idx] for leaf_idx in leaf_labels]
+        ax.set_xticks(range(5, len(leaf_labels) * 10, 10))
+        ax.set_xticklabels(leaf_label_names, rotation=90, fontsize=8)
+        
+        # Color x-axis labels by cluster
+        for i, label in enumerate(ax.get_xticklabels()):
+            leaf_idx = leaf_labels[i]
+            cluster_id = h_labels[leaf_idx]
+            cluster_color = lut.get(cluster_id, (0, 0, 0))
+            label.set_color(cluster_color)
+            label.set_fontweight('bold')
+        
         plt.title(f'Hierarchical Clustering Dendrogram ({metric.capitalize()} metric)', fontsize=14, fontweight='bold')
         plt.ylabel('Distance', fontsize=12)
         plt.xlabel('Sample', fontsize=12)
@@ -497,71 +566,108 @@ def cluster_genomes_func(df, output_path, metric='cosine'):
         plt.savefig(os.path.join(output_path, 'dendrogram_hierarchical.png'), dpi=150, bbox_inches='tight')
         plt.savefig(os.path.join(output_path, 'dendrogram_hierarchical.svg'), bbox_inches='tight')
         plt.close()
-        logger.info('Standalone dendrogram saved successfully.')
+        logger.info('Standalone dendrogram with colored branches and labels saved successfully.')
         reordered_idx = dendro_result['leaves']
+    except RecursionError as e:
+        logger.warning(f'Dendrogram recursion depth exceeded: {e}. Falling back to leaf order from linkage matrix.')
+        reordered_idx = sch.leaves_list(row_linkage)
     except Exception as e:
         logger.warning(f'Dendrogram generation failed: {e}. Using default row order.')
         reordered_idx = np.arange(len(data_to_plot))
+    finally:
+        sys.setrecursionlimit(orig_recursion_limit)
     
     # Reorder heatmap data based on dendrogram
     data_to_plot = data_to_plot.iloc[reordered_idx]
     current_row_colors = row_colors.iloc[reordered_idx]
 
     # 2. PLOT CLUSTERMAP WITH DENDROGRAMS (row order pre-computed to avoid recursion)
+
+    def plot_clustermap_with_fallback(data, row_colors, metric, output_path, row_cluster, col_cluster):
+        try:
+            g = sns.clustermap(data, 
+                            row_cluster=row_cluster,      # Use pre-computed order if row_cluster=False
+                            col_cluster=col_cluster,      # Try column clustering
+                            row_colors=row_colors,
+                            cmap=binary_grey_cmap, 
+                            metric=metric,
+                            figsize=(14, 12),
+                            cbar_pos=(0.02, 0.8, 0.03, 0.15),
+                            yticklabels=False,
+                            xticklabels=False)
+        except Exception as e:
+            logger.warning(f'Column clustering failed ({e}), trying without column clustering.')
+            try:
+                g = sns.clustermap(data, 
+                                row_cluster=row_cluster,
+                                col_cluster=False,  # Disable column clustering
+                                row_colors=row_colors,
+                                cmap=binary_grey_cmap, 
+                                metric=metric,
+                                figsize=(14, 12),
+                                cbar_pos=(0.02, 0.8, 0.03, 0.15),
+                                yticklabels=False,
+                                xticklabels=False)
+            except Exception as e2:
+                logger.warning(f'Basic clustermap also failed ({e2}), creating simple heatmap.')
+                plt.figure(figsize=(12, 8))
+                sns.heatmap(data, 
+                           cmap=binary_grey_cmap,
+                           cbar=False,
+                           yticklabels=False,
+                           xticklabels=False)
+                g = plt.gca().figure  # Create a mock clustermap object for saving
+        
+        g.ax_cbar.set_visible(False)
+
+        cluster_patches = [mpatches.Patch(color=color, label=f'Cluster {label}') 
+                    for label, color in lut.items()]
+
+        binary_patches = [
+            mpatches.Patch(facecolor='#FFFFFF', label='Absent', edgecolor='grey', linewidth=0.5),
+            mpatches.Patch(facecolor='#333333', label='Present')
+        ]
+
+        g.fig.legend(handles=cluster_patches, 
+                title='Hierarchical Clusters', 
+                loc='lower center', 
+                bbox_to_anchor=(0.5, -0.05), 
+                ncol=6, 
+                fontsize='small')
+
+        g.fig.legend(handles=binary_patches, 
+                title='Include GFF features', 
+                loc='upper left', 
+                bbox_to_anchor=(0.05, 0.95))    
+        
+        plt.subplots_adjust(bottom=0.1)
+
+        g.savefig(f'{output_path}/hierarchical_clustermap.png', bbox_inches='tight', dpi=150)
+        plt.close()
+
+        g.savefig(f'{output_path}/hierarchical_clustermap.svg', bbox_inches='tight', dpi=150)
+        plt.close()
+    
     try:
-        g = sns.clustermap(data_to_plot, 
-                    row_cluster=False,            # Use pre-computed dendro order
-                    col_cluster=True,             # Cluster gene columns
-                    row_colors=current_row_colors,
-                    cmap=binary_grey_cmap, 
-                    metric=metric,
-                    figsize=(14, 12),
-                    cbar_pos=(0.02, 0.8, 0.03, 0.15),
-                    yticklabels=False,
-                    xticklabels=False)
+        plot_clustermap_with_fallback(data_to_plot, current_row_colors, metric, output_path, row_cluster=False, col_cluster=True)
         logger.info('Heatmap with column dendrogram generated successfully.')
     except Exception as e:
-        logger.warning(f'Clustermap with dendrograms failed: {e}. Generating basic heatmap.')
-        g = sns.clustermap(data_to_plot,
-                    row_cluster=False,
-                    col_cluster=False,
-                    yticklabels=False,
-                    xticklabels=False,
-                    row_colors=current_row_colors,
-                    cmap=binary_grey_cmap,
-                    metric=metric,
-                    figsize=(12, 12))
-    
-    g.ax_cbar.set_visible(False)
+        logger.error(f'Failed to generate heatmap with dendrogram: {e}')
+        # Try one more time with no clustering at all
+        try:
+            plt.figure(figsize=(12, 8))
+            sns.heatmap(data_to_plot, 
+                       cmap=binary_grey_cmap,
+                       cbar=False,
+                       yticklabels=False,
+                       xticklabels=False)
+            plt.title('Gene Presence/Absence Matrix')
+            plt.savefig(f'{output_path}/hierarchical_clustermap.png', bbox_inches='tight', dpi=150)
+            plt.close()
+            logger.info('Basic heatmap saved as fallback.')
+        except Exception as e2:
+            logger.error(f'Even basic heatmap failed: {e2}')
 
-    cluster_patches = [mpatches.Patch(color=color, label=f'Cluster {label}') 
-                   for label, color in lut.items()]
-
-    binary_patches = [
-        mpatches.Patch(facecolor='#FFFFFF', label='Absent', edgecolor='grey', linewidth=0.5),
-        mpatches.Patch(facecolor='#333333', label='Present')
-    ]
-
-    g.fig.legend(handles=cluster_patches, 
-             title='Hierarchical Clusters', 
-             loc='lower center', 
-             bbox_to_anchor=(0.5, -0.05), 
-             ncol=6, 
-             fontsize='small')
-
-    g.fig.legend(handles=binary_patches, 
-             title='Genomic Context', 
-             loc='upper left', 
-             bbox_to_anchor=(0.05, 0.95))    
-    
-    plt.subplots_adjust(bottom=0.1)
-
-    g.savefig(f'{output_path}/hierarchical_clustermap.png', bbox_inches='tight', dpi=150)
-    plt.close()
-
-    g.savefig(f'{output_path}/hierarchical_clustermap.svg', bbox_inches='tight', dpi=150)
-    plt.close()
-    
     active_genomes = X_cluster.index 
     
     hierarchical_series = pd.Series(h_labels, index=active_genomes)
