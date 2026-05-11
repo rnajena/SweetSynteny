@@ -80,13 +80,14 @@ def process_clusters(cluster_file, gene_of_interest, size_for_cluster=2):
 
     filtered_clusters = {k: v for k, v in cluster_map.items() if len(v) >= size_for_cluster}
     colors = generate_distinct_colors(len(filtered_clusters))
-    colors = [color for color in colors if color != '#FFFFFF']
+    colors = [color for color in colors if color != '#FFFFFF' and color != '#FF0000']
 
     color_map = {}
     for (cluster_id, members), color in zip(filtered_clusters.items(), colors):
         for member in members:
             if color != '#FF0000':
                 color_map[member] = color
+                print(member, color)
 
     for member_id in goi_members:
         color_map[member_id] = '#FF0000'
