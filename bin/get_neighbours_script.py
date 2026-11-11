@@ -1,7 +1,6 @@
 
 # (C) 2024, Maria Schreiber, MIT license
-#
-# Revised genomic neighbourhood extraction script.
+""" Revised genomic neighbourhood extraction script. """
 
 import argparse
 import logging
